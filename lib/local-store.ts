@@ -33,7 +33,11 @@ const initialState: ClipPartnerState = {
   settlements: seedSettlements
 };
 
-function loadState(): ClipPartnerState {
+function apiBase() {
+  return process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "");
+}
+
+function loadLocalState(): ClipPartnerState {
   if (typeof window === "undefined") {
     return initialState;
   }
@@ -54,14 +58,51 @@ function nextId(prefix: string) {
   return `${prefix}-${new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14)}`;
 }
 
+async function apiRequest(path: string, init: RequestInit = {}) {
+  const base = apiBase();
+  if (!base) {
+    return null;
+  }
+
+  const response = await fetch(`${base}${path}`, {
+    ...init,
+    headers: {
+      "content-type": "application/json",
+      ...init.headers
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+
+  return (await response.json()) as ClipPartnerState;
+}
+
 export function useClipPartnerStore() {
   const [state, setState] = useState<ClipPartnerState>(initialState);
   const [isHydrated, setIsHydrated] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<"local" | "remote" | "syncing" | "error">("local");
 
   useEffect(() => {
-    const timer = window.setTimeout(() => {
-      setState(loadState());
+    const timer = window.setTimeout(async () => {
+      setState(loadLocalState());
       setIsHydrated(true);
+
+      if (!apiBase()) {
+        return;
+      }
+
+      try {
+        setSyncStatus("syncing");
+        const remoteState = await apiRequest("/state");
+        if (remoteState) {
+          setState(remoteState);
+          setSyncStatus("remote");
+        }
+      } catch {
+        setSyncStatus("error");
+      }
     }, 0);
 
     return () => window.clearTimeout(timer);
@@ -89,128 +130,199 @@ export function useClipPartnerStore() {
     };
   }, [state]);
 
-  function updateAuthorizationStatus(id: string, status: AuthorizationStatus) {
-    setState((current) => ({
-      ...current,
-      authorizationRequests: current.authorizationRequests.map((item) =>
-        item.id === id ? { ...item, status } : item
-      )
-    }));
+  async function syncMutation(path: string, init: RequestInit, localFallback: () => ClipPartnerState) {
+    try {
+      if (apiBase()) {
+        setSyncStatus("syncing");
+        const remoteState = await apiRequest(path, init);
+        if (remoteState) {
+          setState(remoteState);
+          setSyncStatus("remote");
+          return;
+        }
+      }
+      setState(localFallback());
+    } catch {
+      setSyncStatus("error");
+      setState(localFallback());
+    }
   }
 
-  function addAuthorizationRequest(input: Pick<AuthorizationRequest, "distributorName" | "socialAccount" | "platform" | "ipName" | "reason">) {
-    const request: AuthorizationRequest = {
-      id: nextId("AR"),
-      phone: "待绑定",
-      status: "pending",
-      appliedAt: new Date().toLocaleString("zh-CN", { hour12: false }),
-      ...input
-    };
+  function updateAuthorizationStatus(id: string, status: AuthorizationStatus) {
+    void syncMutation(
+      `/authorization-requests/${id}`,
+      { method: "PATCH", body: JSON.stringify({ status }) },
+      () => ({
+        ...state,
+        authorizationRequests: state.authorizationRequests.map((item) => (item.id === id ? { ...item, status } : item))
+      })
+    );
+  }
 
-    setState((current) => ({
-      ...current,
-      authorizationRequests: [request, ...current.authorizationRequests]
-    }));
+  function addAuthorizationRequest(
+    input: Pick<AuthorizationRequest, "distributorName" | "socialAccount" | "platform" | "ipName" | "reason">
+  ) {
+    void syncMutation(
+      "/authorization-requests",
+      { method: "POST", body: JSON.stringify(input) },
+      () => ({
+        ...state,
+        authorizationRequests: [
+          {
+            id: nextId("AR"),
+            phone: "待绑定",
+            status: "pending",
+            appliedAt: new Date().toLocaleString("zh-CN", { hour12: false }),
+            ...input
+          },
+          ...state.authorizationRequests
+        ]
+      })
+    );
   }
 
   function addMaterial(input: Pick<Material, "title" | "ipName" | "sourcePlatform" | "productName">) {
-    const material: Material = {
-      id: nextId("CLIP"),
-      liveDate: new Date().toISOString().slice(0, 10),
-      duration: "待切片",
-      tags: ["待标注"],
-      status: "processing",
-      claims: 0,
-      downloads: 0,
-      ...input
-    };
-
-    setState((current) => ({
-      ...current,
-      materials: [material, ...current.materials]
-    }));
+    void syncMutation(
+      "/materials",
+      { method: "POST", body: JSON.stringify(input) },
+      () => ({
+        ...state,
+        materials: [
+          {
+            id: nextId("CLIP"),
+            liveDate: new Date().toISOString().slice(0, 10),
+            duration: "待切片",
+            tags: ["待标注"],
+            status: "processing",
+            claims: 0,
+            downloads: 0,
+            ...input
+          },
+          ...state.materials
+        ]
+      })
+    );
   }
 
   function updateMaterialStatus(id: string, status: MaterialStatus) {
-    setState((current) => ({
-      ...current,
-      materials: current.materials.map((item) => (item.id === id ? { ...item, status } : item))
-    }));
+    void syncMutation(
+      `/materials/${id}`,
+      { method: "PATCH", body: JSON.stringify({ status }) },
+      () => ({
+        ...state,
+        materials: state.materials.map((item) => (item.id === id ? { ...item, status } : item))
+      })
+    );
   }
 
   function claimMaterial(materialId: string, distributorName = "周婧") {
-    setState((current) => ({
-      ...current,
-      materials: current.materials.map((item) =>
-        item.id === materialId ? { ...item, claims: item.claims + 1, downloads: item.downloads + 1 } : item
-      ),
-      publishRecords: [
-        {
-          id: nextId("PUB"),
-          distributorName,
-          materialTitle: current.materials.find((item) => item.id === materialId)?.title ?? "未知素材",
-          productName: current.materials.find((item) => item.id === materialId)?.productName ?? "待选择商品",
-          platform: "视频号",
-          status: "downloaded",
-          submittedAt: new Date().toLocaleString("zh-CN", { hour12: false }),
-          gmv: 0,
-          commission: 0
-        },
-        ...current.publishRecords
-      ]
-    }));
+    void syncMutation(
+      `/materials/${materialId}/claim`,
+      { method: "POST", body: JSON.stringify({ distributorName }) },
+      () => {
+        const material = state.materials.find((item) => item.id === materialId);
+        return {
+          ...state,
+          materials: state.materials.map((item) =>
+            item.id === materialId ? { ...item, claims: item.claims + 1, downloads: item.downloads + 1 } : item
+          ),
+          publishRecords: [
+            {
+              id: nextId("PUB"),
+              distributorName,
+              materialTitle: material?.title ?? "未知素材",
+              productName: material?.productName ?? "待选择商品",
+              platform: "视频号",
+              status: "downloaded",
+              submittedAt: new Date().toLocaleString("zh-CN", { hour12: false }),
+              gmv: 0,
+              commission: 0
+            },
+            ...state.publishRecords
+          ]
+        };
+      }
+    );
   }
 
   function submitPublishLink(recordId: string) {
-    updatePublishStatus(recordId, "submitted");
+    void syncMutation(
+      `/publish-records/${recordId}/submit`,
+      { method: "POST" },
+      () => ({
+        ...state,
+        publishRecords: state.publishRecords.map((item) =>
+          item.id === recordId
+            ? { ...item, status: "submitted", submittedAt: new Date().toLocaleString("zh-CN", { hour12: false }) }
+            : item
+        )
+      })
+    );
   }
 
   function updatePublishStatus(id: string, status: PublishStatus) {
-    setState((current) => ({
-      ...current,
-      publishRecords: current.publishRecords.map((item) =>
-        item.id === id ? { ...item, status, submittedAt: new Date().toLocaleString("zh-CN", { hour12: false }) } : item
-      )
-    }));
+    void syncMutation(
+      `/publish-records/${id}`,
+      { method: "PATCH", body: JSON.stringify({ status }) },
+      () => ({
+        ...state,
+        publishRecords: state.publishRecords.map((item) =>
+          item.id === id ? { ...item, status, submittedAt: new Date().toLocaleString("zh-CN", { hour12: false }) } : item
+        )
+      })
+    );
   }
 
   function importPerformance(id: string, gmv: number, commission: number) {
-    setState((current) => ({
-      ...current,
-      publishRecords: current.publishRecords.map((item) =>
-        item.id === id ? { ...item, gmv, commission, status: "verified" } : item
-      )
-    }));
+    void syncMutation(
+      `/publish-records/${id}/performance`,
+      { method: "POST", body: JSON.stringify({ gmv, commission }) },
+      () => ({
+        ...state,
+        publishRecords: state.publishRecords.map((item) =>
+          item.id === id ? { ...item, gmv, commission, status: "verified" } : item
+        )
+      })
+    );
   }
 
   function generateSettlement() {
-    const verifiedRecords = state.publishRecords.filter((item) => item.status === "verified");
-    const payableCommission = verifiedRecords.reduce((sum, item) => sum + item.commission * 0.5, 0);
-
-    const settlement: Settlement = {
-      id: nextId("SET"),
-      distributorName: "本月汇总",
-      period: new Date().toISOString().slice(0, 7),
-      verifiedPosts: verifiedRecords.length,
-      payableCommission,
-      status: "pending"
-    };
-
-    setState((current) => ({
-      ...current,
-      settlements: [settlement, ...current.settlements]
-    }));
+    void syncMutation(
+      "/settlements/generate",
+      { method: "POST" },
+      () => {
+        const verifiedRecords = state.publishRecords.filter((item) => item.status === "verified");
+        return {
+          ...state,
+          settlements: [
+            {
+              id: nextId("SET"),
+              distributorName: "本月汇总",
+              period: new Date().toISOString().slice(0, 7),
+              verifiedPosts: verifiedRecords.length,
+              payableCommission: verifiedRecords.reduce((sum, item) => sum + item.commission * 0.5, 0),
+              status: "pending"
+            },
+            ...state.settlements
+          ]
+        };
+      }
+    );
   }
 
   function updateSettlementStatus(id: string, status: Settlement["status"]) {
-    setState((current) => ({
-      ...current,
-      settlements: current.settlements.map((item) => (item.id === id ? { ...item, status } : item))
-    }));
+    void syncMutation(
+      `/settlements/${id}`,
+      { method: "PATCH", body: JSON.stringify({ status }) },
+      () => ({
+        ...state,
+        settlements: state.settlements.map((item) => (item.id === id ? { ...item, status } : item))
+      })
+    );
   }
 
   function resetDemoData() {
-    setState(initialState);
+    void syncMutation("/state/reset", { method: "POST" }, () => initialState);
     if (typeof window !== "undefined") {
       window.localStorage.removeItem(STORAGE_KEY);
     }
@@ -220,6 +332,7 @@ export function useClipPartnerStore() {
     state,
     metrics,
     isHydrated,
+    syncStatus,
     updateAuthorizationStatus,
     addAuthorizationRequest,
     addMaterial,
