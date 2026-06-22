@@ -1,0 +1,155 @@
+"use client";
+
+import { Archive, FileUp, Plus, Scissors, Search, UploadCloud } from "lucide-react";
+import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
+import { StatusBadge } from "@/components/Badge";
+import { useClipPartnerStore } from "@/lib/local-store";
+
+export default function MaterialsPage() {
+  const { state, addMaterial, updateMaterialStatus } = useClipPartnerStore();
+  const materials = state.materials;
+
+  return (
+    <AppShell active="/admin/materials">
+      <PageHeader
+        kicker="素材管理"
+        title="从直播录屏到可领取切片"
+        subtitle="运营上传直播录屏，人工选择切点生成素材，再补充标题、标签、卖点、推荐文案并绑定精选联盟商品。"
+        actions={
+          <>
+            <button
+              className="button"
+              onClick={() =>
+                addMaterial({
+                  title: "新上传直播录屏待切片",
+                  ipName: "老许家居",
+                  sourcePlatform: "抖音",
+                  productName: "待绑定商品"
+                })
+              }
+            >
+              <FileUp size={16} aria-hidden /> 上传录屏
+            </button>
+            <button
+              className="button primary"
+              onClick={() =>
+                addMaterial({
+                  title: "人工切点生成的新素材",
+                  ipName: "晴姐穿搭",
+                  sourcePlatform: "视频号",
+                  productName: "冰感通勤套装"
+                })
+              }
+            >
+              <Scissors size={16} aria-hidden /> 创建切点
+            </button>
+          </>
+        }
+      />
+
+      <div className="filter-bar">
+        <div className="input" style={{ minWidth: 280 }}>
+          <Search size={16} aria-hidden /> 搜索素材标题 / 商品
+        </div>
+        <select className="select" defaultValue="all" aria-label="素材状态">
+          <option value="all">全部状态</option>
+          <option value="published">可领取</option>
+          <option value="ready">待完善</option>
+          <option value="processing">处理中</option>
+        </select>
+        <button
+          className="button"
+          onClick={() =>
+            addMaterial({
+              title: "后台手动新增素材",
+              ipName: "林哥数码",
+              sourcePlatform: "抖音",
+              productName: "领夹无线麦克风"
+            })
+          }
+        >
+          <Plus size={16} aria-hidden /> 新建素材
+        </button>
+      </div>
+
+      <section className="table-card">
+        <div className="table-header">
+          <h2 className="table-title">素材列表</h2>
+          <span className="badge info">人工切点优先</span>
+        </div>
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>素材</th>
+              <th>来源</th>
+              <th>标签</th>
+              <th>绑定商品</th>
+              <th>领取 / 下载</th>
+              <th>状态</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {materials.map((material) => (
+              <tr key={material.id}>
+                <td>
+                  <div className="item-title">{material.title}</div>
+                  <div className="item-meta">时长 {material.duration} · 直播日 {material.liveDate}</div>
+                </td>
+                <td>
+                  <div className="item-title">{material.ipName}</div>
+                  <div className="item-meta">{material.sourcePlatform}</div>
+                </td>
+                <td>
+                  <div className="toolbar">
+                    {material.tags.map((tag) => (
+                      <span className="badge" key={tag}>
+                        {tag}
+                      </span>
+                    ))}
+                  </div>
+                </td>
+                <td>{material.productName}</td>
+                <td>
+                  {material.claims} / {material.downloads}
+                </td>
+                <td>
+                  <StatusBadge status={material.status} />
+                </td>
+                <td>
+                  <div className="toolbar">
+                    <button
+                      className="button"
+                      title="设为可领取"
+                      aria-label="设为可领取"
+                      onClick={() => updateMaterialStatus(material.id, "published")}
+                    >
+                      <UploadCloud size={16} aria-hidden />
+                    </button>
+                    <button
+                      className="button"
+                      title="退回待完善"
+                      aria-label="退回待完善"
+                      onClick={() => updateMaterialStatus(material.id, "ready")}
+                    >
+                      <Scissors size={16} aria-hidden />
+                    </button>
+                    <button
+                      className="button"
+                      title="下架"
+                      aria-label="下架"
+                      onClick={() => updateMaterialStatus(material.id, "archived")}
+                    >
+                      <Archive size={16} aria-hidden />
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+    </AppShell>
+  );
+}
