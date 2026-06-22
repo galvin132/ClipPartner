@@ -4,7 +4,8 @@ compatibility_date = "2026-06-22"
 
 [vars]
 APP_ENV = "development"
-FRONTEND_ORIGIN = "http://localhost:3000"
+FRONTEND_ORIGIN = "https://clippartner.vercel.app"
+NEXT_PUBLIC_SUPABASE_URL = "https://qhlesjopsqzcefsyjvgk.supabase.co"
 
 [[r2_buckets]]
 binding = "CLIP_PARTNER_BUCKET"
