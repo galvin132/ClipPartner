@@ -23,6 +23,12 @@ type MaterialInput = {
   productName: string;
 };
 
+type RecordingUploadMeta = {
+  title: string;
+  ipName: string;
+  sourcePlatform: PlatformLabel;
+};
+
 export interface Env {
   APP_ENV: string;
   FRONTEND_ORIGIN: string;
@@ -230,6 +236,60 @@ async function createMaterial(env: Env, input: MaterialInput) {
     clip_asset_id: clip.id,
     product_id: product.id,
     is_primary: true
+  });
+}
+
+function safeFileName(name: string) {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 120);
+}
+
+async function uploadRecording(env: Env, request: Request) {
+  const form = await request.formData();
+  const file = form.get("file");
+  if (!(file instanceof File)) {
+    throw new Error("Missing recording file");
+  }
+
+  const meta: RecordingUploadMeta = {
+    title: String(form.get("title") || file.name || "上传录屏待切片"),
+    ipName: String(form.get("ipName") || "晴姐穿搭"),
+    sourcePlatform: String(form.get("sourcePlatform") || "视频号") as PlatformLabel
+  };
+
+  const ip = await findOrCreateIp(env, meta.ipName, meta.sourcePlatform);
+  const key = `recordings/${new Date().toISOString().slice(0, 10)}/${crypto.randomUUID()}-${safeFileName(file.name)}`;
+
+  await env.CLIP_PARTNER_BUCKET.put(key, file.stream(), {
+    httpMetadata: {
+      contentType: file.type || "application/octet-stream"
+    },
+    customMetadata: {
+      title: meta.title,
+      ipName: meta.ipName,
+      sourcePlatform: platformToValue[meta.sourcePlatform]
+    }
+  });
+
+  const recording = await insertRow<{ id: string }>(env, "live_recordings", {
+    ip_account_id: ip.id,
+    source_platform: platformToValue[meta.sourcePlatform],
+    live_date: new Date().toISOString().slice(0, 10),
+    title: meta.title,
+    r2_key: key
+  });
+
+  await insertRow(env, "clip_assets", {
+    live_recording_id: recording.id,
+    ip_account_id: ip.id,
+    title: `${meta.title} - 待切片`,
+    status: "processing",
+    tags: ["录屏上传", "待切片"],
+    start_second: 0,
+    end_second: 0
   });
 }
 
@@ -574,6 +634,11 @@ const worker = {
 
       if (url.pathname === "/authorization-requests" && request.method === "POST") {
         await createAuthorizationRequest(env, await readBody<AuthorizationRequestInput>(request));
+        return json(await listState(env), env, { status: 201 });
+      }
+
+      if (url.pathname === "/recordings/upload" && request.method === "POST") {
+        await uploadRecording(env, request);
         return json(await listState(env), env, { status: 201 });
       }
 

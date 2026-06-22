@@ -204,6 +204,36 @@ export function useClipPartnerStore() {
     );
   }
 
+  async function uploadRecording(file: File, input: Pick<Material, "title" | "ipName" | "sourcePlatform">) {
+    const base = apiBase();
+    if (!base) {
+      addMaterial({ ...input, productName: "待绑定商品" });
+      return;
+    }
+
+    try {
+      setSyncStatus("syncing");
+      const form = new FormData();
+      form.append("file", file);
+      form.append("title", input.title);
+      form.append("ipName", input.ipName);
+      form.append("sourcePlatform", input.sourcePlatform);
+
+      const response = await fetch(`${base}/recordings/upload`, {
+        method: "POST",
+        body: form
+      });
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+      setState((await response.json()) as ClipPartnerState);
+      setSyncStatus("remote");
+    } catch {
+      setSyncStatus("error");
+      addMaterial({ ...input, productName: "待绑定商品" });
+    }
+  }
+
   function updateMaterialStatus(id: string, status: MaterialStatus) {
     void syncMutation(
       `/materials/${id}`,
@@ -336,6 +366,7 @@ export function useClipPartnerStore() {
     updateAuthorizationStatus,
     addAuthorizationRequest,
     addMaterial,
+    uploadRecording,
     updateMaterialStatus,
     claimMaterial,
     submitPublishLink,

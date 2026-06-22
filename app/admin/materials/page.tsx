@@ -1,5 +1,6 @@
 "use client";
 
+import { useRef } from "react";
 import { Archive, FileUp, Plus, Scissors, Search, UploadCloud } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
@@ -7,28 +8,36 @@ import { StatusBadge } from "@/components/Badge";
 import { useClipPartnerStore } from "@/lib/local-store";
 
 export default function MaterialsPage() {
-  const { state, addMaterial, updateMaterialStatus } = useClipPartnerStore();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const { state, addMaterial, uploadRecording, updateMaterialStatus, syncStatus } = useClipPartnerStore();
   const materials = state.materials;
 
   return (
     <AppShell active="/admin/materials">
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="video/*"
+        hidden
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          if (!file) return;
+          void uploadRecording(file, {
+            title: file.name.replace(/\.[^.]+$/, ""),
+            ipName: "晴姐穿搭",
+            sourcePlatform: "视频号"
+          });
+          event.target.value = "";
+        }}
+      />
+
       <PageHeader
         kicker="素材管理"
         title="从直播录屏到可领取切片"
         subtitle="运营上传直播录屏，人工选择切点生成素材，再补充标题、标签、卖点、推荐文案并绑定精选联盟商品。"
         actions={
           <>
-            <button
-              className="button"
-              onClick={() =>
-                addMaterial({
-                  title: "新上传直播录屏待切片",
-                  ipName: "老许家居",
-                  sourcePlatform: "抖音",
-                  productName: "待绑定商品"
-                })
-              }
-            >
+            <button className="button" onClick={() => fileInputRef.current?.click()}>
               <FileUp size={16} aria-hidden /> 上传录屏
             </button>
             <button
@@ -71,12 +80,15 @@ export default function MaterialsPage() {
         >
           <Plus size={16} aria-hidden /> 新建素材
         </button>
+        <span className={syncStatus === "remote" ? "badge success" : syncStatus === "error" ? "badge danger" : "badge"}>
+          {syncStatus === "remote" ? "已连接线上数据" : syncStatus === "syncing" ? "同步中" : syncStatus === "error" ? "同步失败" : "本地模式"}
+        </span>
       </div>
 
       <section className="table-card">
         <div className="table-header">
           <h2 className="table-title">素材列表</h2>
-          <span className="badge info">人工切点优先</span>
+          <span className="badge info">录屏上传到 R2，切片任务后续接 FFmpeg</span>
         </div>
         <table className="data-table">
           <thead>
