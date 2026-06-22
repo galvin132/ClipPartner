@@ -375,6 +375,21 @@ textarea {
   color: var(--ink);
 }
 
+.search-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.search-control input {
+  min-width: 0;
+  width: 100%;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: inherit;
+}
+
 .select {
   min-width: 150px;
 }

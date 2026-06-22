@@ -1,19 +1,25 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   authorizationRequests as seedAuthorizationRequests,
   materials as seedMaterials,
+  products as seedProducts,
   publishRecords as seedPublishRecords,
+  riskRecords as seedRiskRecords,
   settlements as seedSettlements
 } from "./mock-data";
+import { reportClientIssue } from "./client-observability";
 import type {
   AuthorizationRequest,
   AuthorizationStatus,
   Material,
   MaterialStatus,
+  Product,
   PublishRecord,
   PublishStatus,
+  RiskRecord,
+  RiskStatus,
   Settlement
 } from "./domain";
 
@@ -22,15 +28,45 @@ const STORAGE_KEY = "clip-partner-mvp-state-v1";
 export type ClipPartnerState = {
   authorizationRequests: AuthorizationRequest[];
   materials: Material[];
+  products: Product[];
   publishRecords: PublishRecord[];
   settlements: Settlement[];
+  riskRecords: RiskRecord[];
+};
+
+type ListMeta = {
+  limit: number;
+  offset: number;
+  count: number;
+  nextOffset: number | null;
+};
+
+type ListParams = {
+  q?: string;
+  status?: string;
+  platform?: string;
+  limit?: number;
+  offset?: number;
+};
+
+type ListKind = "authorizationRequests" | "materials" | "products" | "publishRecords" | "settlements" | "riskRecords";
+
+const listEndpoints: Record<ListKind, string> = {
+  authorizationRequests: "/authorization-requests",
+  materials: "/materials",
+  products: "/products",
+  publishRecords: "/publish-records",
+  settlements: "/settlements",
+  riskRecords: "/risk-records"
 };
 
 const initialState: ClipPartnerState = {
   authorizationRequests: seedAuthorizationRequests,
   materials: seedMaterials,
+  products: seedProducts,
   publishRecords: seedPublishRecords,
-  settlements: seedSettlements
+  settlements: seedSettlements,
+  riskRecords: seedRiskRecords
 };
 
 function apiBase() {
@@ -58,25 +94,102 @@ function nextId(prefix: string) {
   return `${prefix}-${new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14)}`;
 }
 
-async function apiRequest(path: string, init: RequestInit = {}) {
+function listQuery(params: ListParams = {}) {
+  const search = new URLSearchParams();
+  search.set("limit", String(params.limit ?? 50));
+  if (params.offset) search.set("offset", String(params.offset));
+  if (params.q?.trim()) search.set("q", params.q.trim());
+  if (params.status && params.status !== "all") search.set("status", params.status);
+  if (params.platform && params.platform !== "all") search.set("platform", params.platform);
+  return search.toString();
+}
+
+async function apiJson<T>(path: string, init: RequestInit = {}) {
   const base = apiBase();
   if (!base) {
     return null;
   }
 
-  const response = await fetch(`${base}${path}`, {
-    ...init,
-    headers: {
-      "content-type": "application/json",
-      ...init.headers
-    }
-  });
+  const method = init.method ?? "GET";
+  let response: Response;
 
-  if (!response.ok) {
-    throw new Error(await response.text());
+  try {
+    response = await fetch(`${base}${path}`, {
+      ...init,
+      headers: {
+        "content-type": "application/json",
+        ...init.headers
+      }
+    });
+  } catch (error) {
+    void reportClientIssue("api_error", error instanceof Error ? error.message : "API request failed", {
+      severity: "error",
+      feature: "remote_api",
+      details: {
+        method,
+        path,
+        error: error instanceof Error ? error.message : "Unknown error"
+      }
+    });
+    throw error;
   }
 
-  return (await response.json()) as ClipPartnerState;
+  if (!response.ok) {
+    const detail = await response.text();
+    void reportClientIssue("api_error", `API ${method} ${path} failed with ${response.status}`, {
+      severity: response.status >= 500 ? "error" : "warn",
+      feature: "remote_api",
+      details: {
+        method,
+        path,
+        status: response.status,
+        detail: detail.slice(0, 500)
+      }
+    });
+    throw new Error(detail);
+  }
+
+  return (await response.json()) as T;
+}
+
+async function apiRequest(path: string, init: RequestInit = {}) {
+  return apiJson<ClipPartnerState>(path, init);
+}
+
+async function loadRemoteState() {
+  const listLimit = 50;
+
+  try {
+    const [authorizationRequests, materials, products, publishRecords, settlements, riskRecords] = await Promise.all([
+      apiJson<{ authorizationRequests: AuthorizationRequest[]; meta?: ListMeta }>(
+        `/authorization-requests?limit=${listLimit}`
+      ),
+      apiJson<{ materials: Material[]; meta?: ListMeta }>(`/materials?limit=${listLimit}`),
+      apiJson<{ products: Product[]; meta?: ListMeta }>(`/products?limit=${listLimit}`),
+      apiJson<{ publishRecords: PublishRecord[]; meta?: ListMeta }>(`/publish-records?limit=${listLimit}`),
+      apiJson<{ settlements: Settlement[]; meta?: ListMeta }>(`/settlements?limit=${listLimit}`),
+      apiJson<{ riskRecords: RiskRecord[]; meta?: ListMeta }>(`/risk-records?limit=${listLimit}`)
+    ]);
+
+    if (authorizationRequests && materials && products && publishRecords && settlements && riskRecords) {
+      return {
+        authorizationRequests: authorizationRequests.authorizationRequests,
+        materials: materials.materials,
+        products: products.products,
+        publishRecords: publishRecords.publishRecords,
+        settlements: settlements.settlements,
+        riskRecords: riskRecords.riskRecords
+      };
+    }
+  } catch {
+    void reportClientIssue("api_fallback", "Remote list endpoint failed; falling back to aggregate state", {
+      severity: "warn",
+      feature: "initial_remote_load"
+    });
+    // Fall back to the legacy aggregate endpoint while older Workers are still deployed.
+  }
+
+  return apiRequest("/state");
 }
 
 export function useClipPartnerStore() {
@@ -95,12 +208,16 @@ export function useClipPartnerStore() {
 
       try {
         setSyncStatus("syncing");
-        const remoteState = await apiRequest("/state");
+        const remoteState = await loadRemoteState();
         if (remoteState) {
-          setState(remoteState);
+          setState({ ...initialState, ...remoteState });
           setSyncStatus("remote");
         }
       } catch {
+        void reportClientIssue("sync_error", "Initial remote state sync failed", {
+          severity: "warn",
+          feature: "initial_remote_load"
+        });
         setSyncStatus("error");
       }
     }, 0);
@@ -136,17 +253,58 @@ export function useClipPartnerStore() {
         setSyncStatus("syncing");
         const remoteState = await apiRequest(path, init);
         if (remoteState) {
-          setState(remoteState);
+          setState({ ...initialState, ...remoteState });
           setSyncStatus("remote");
           return;
         }
       }
       setState(localFallback());
     } catch {
+      void reportClientIssue("sync_error", "Remote mutation failed; local fallback applied", {
+        severity: "warn",
+        feature: "mutation",
+        details: {
+          path,
+          method: init.method ?? "GET"
+        }
+      });
       setSyncStatus("error");
       setState(localFallback());
     }
   }
+
+  const refreshRemoteList = useCallback(async (kind: ListKind, params: ListParams = {}) => {
+    const endpoint = listEndpoints[kind];
+    const query = listQuery(params);
+
+    try {
+      if (!apiBase()) {
+        return null;
+      }
+
+      setSyncStatus("syncing");
+      const response = await apiJson<Partial<ClipPartnerState> & { meta?: ListMeta }>(`${endpoint}?${query}`);
+      const items = response?.[kind];
+      if (!items) {
+        return null;
+      }
+
+      setState((current) => ({ ...current, [kind]: items }));
+      setSyncStatus("remote");
+      return response.meta ?? null;
+    } catch {
+      void reportClientIssue("sync_error", "Remote list refresh failed", {
+        severity: "warn",
+        feature: "list_refresh",
+        details: {
+          kind,
+          endpoint
+        }
+      });
+      setSyncStatus("error");
+      return null;
+    }
+  }, []);
 
   function updateAuthorizationStatus(id: string, status: AuthorizationStatus) {
     void syncMutation(
@@ -204,6 +362,37 @@ export function useClipPartnerStore() {
     );
   }
 
+  function addProduct(input: Pick<Product, "name" | "platform" | "affiliateUrl" | "commissionRate">) {
+    void syncMutation(
+      "/products",
+      { method: "POST", body: JSON.stringify(input) },
+      () => ({
+        ...state,
+        products: [
+          {
+            id: nextId("PROD"),
+            isActive: true,
+            materialCount: 0,
+            createdAt: new Date().toISOString().slice(0, 10),
+            ...input
+          },
+          ...state.products
+        ]
+      })
+    );
+  }
+
+  function updateProductStatus(id: string, isActive: boolean) {
+    void syncMutation(
+      `/products/${id}`,
+      { method: "PATCH", body: JSON.stringify({ isActive }) },
+      () => ({
+        ...state,
+        products: state.products.map((item) => (item.id === id ? { ...item, isActive } : item))
+      })
+    );
+  }
+
   async function uploadRecording(file: File, input: Pick<Material, "title" | "ipName" | "sourcePlatform">) {
     const base = apiBase();
     if (!base) {
@@ -213,6 +402,61 @@ export function useClipPartnerStore() {
 
     try {
       setSyncStatus("syncing");
+      try {
+        const init = await apiJson<{
+          upload: {
+            uploadId: string;
+            key: string;
+            uploadUrl: string;
+            method: "PUT";
+            headers: Record<string, string>;
+          };
+        }>("/recordings/direct-upload/init", {
+          method: "POST",
+          body: JSON.stringify({
+            ...input,
+            fileName: file.name,
+            contentType: file.type || "application/octet-stream",
+            size: file.size
+          })
+        });
+
+        if (init?.upload) {
+          const uploadResponse = await fetch(init.upload.uploadUrl, {
+            method: init.upload.method,
+            headers: init.upload.headers,
+            body: file
+          });
+          if (!uploadResponse.ok) {
+            throw new Error(await uploadResponse.text());
+          }
+
+          const remoteState = await apiJson<ClipPartnerState>("/recordings/direct-upload/complete", {
+            method: "POST",
+            body: JSON.stringify({
+              uploadId: init.upload.uploadId,
+              key: init.upload.key,
+              ...input
+            })
+          });
+          if (remoteState) {
+            setState({ ...initialState, ...remoteState });
+            setSyncStatus("remote");
+            return;
+          }
+        }
+      } catch {
+        void reportClientIssue("upload_error", "Direct upload failed; falling back to form upload", {
+          severity: "warn",
+          feature: "recording_direct_upload",
+          details: {
+            fileType: file.type || "application/octet-stream",
+            fileSize: file.size
+          }
+        });
+        // Direct upload may be unavailable in local/dev until R2 S3 credentials are configured.
+      }
+
       const form = new FormData();
       form.append("file", file);
       form.append("title", input.title);
@@ -229,6 +473,14 @@ export function useClipPartnerStore() {
       setState((await response.json()) as ClipPartnerState);
       setSyncStatus("remote");
     } catch {
+      void reportClientIssue("upload_error", "Recording upload failed; local material fallback applied", {
+        severity: "error",
+        feature: "recording_upload",
+        details: {
+          fileType: file.type || "application/octet-stream",
+          fileSize: file.size
+        }
+      });
       setSyncStatus("error");
       addMaterial({ ...input, productName: "待绑定商品" });
     }
@@ -241,6 +493,32 @@ export function useClipPartnerStore() {
       () => ({
         ...state,
         materials: state.materials.map((item) => (item.id === id ? { ...item, status } : item))
+      })
+    );
+  }
+
+  function bindMaterialProduct(materialId: string, productId: string) {
+    const product = state.products.find((item) => item.id === productId);
+    if (!product) return;
+
+    void syncMutation(
+      `/materials/${materialId}/product`,
+      { method: "POST", body: JSON.stringify({ productId }) },
+      () => ({
+        ...state,
+        materials: state.materials.map((item) =>
+          item.id === materialId ? { ...item, productName: product.name } : item
+        ),
+        products: state.products.map((item) => {
+          const material = state.materials.find((current) => current.id === materialId);
+          if (item.id === productId && material?.productName !== product.name) {
+            return { ...item, materialCount: item.materialCount + 1 };
+          }
+          if (material?.productName === item.name && item.id !== productId) {
+            return { ...item, materialCount: Math.max(0, item.materialCount - 1) };
+          }
+          return item;
+        })
       })
     );
   }
@@ -275,10 +553,10 @@ export function useClipPartnerStore() {
     );
   }
 
-  function submitPublishLink(recordId: string) {
+  function submitPublishLink(recordId: string, publishUrl = "https://example.com/published-work") {
     void syncMutation(
       `/publish-records/${recordId}/submit`,
-      { method: "POST" },
+      { method: "POST", body: JSON.stringify({ publishUrl }) },
       () => ({
         ...state,
         publishRecords: state.publishRecords.map((item) =>
@@ -351,6 +629,36 @@ export function useClipPartnerStore() {
     );
   }
 
+  function addRiskRecord(input: Pick<RiskRecord, "platform" | "account" | "issue" | "workUrl">) {
+    void syncMutation(
+      "/risk-records",
+      { method: "POST", body: JSON.stringify(input) },
+      () => ({
+        ...state,
+        riskRecords: [
+          {
+            id: nextId("RISK"),
+            status: "open",
+            createdAt: new Date().toLocaleString("zh-CN", { hour12: false }),
+            ...input
+          },
+          ...state.riskRecords
+        ]
+      })
+    );
+  }
+
+  function updateRiskStatus(id: string, status: RiskStatus) {
+    void syncMutation(
+      `/risk-records/${id}`,
+      { method: "PATCH", body: JSON.stringify({ status }) },
+      () => ({
+        ...state,
+        riskRecords: state.riskRecords.map((item) => (item.id === id ? { ...item, status } : item))
+      })
+    );
+  }
+
   function resetDemoData() {
     void syncMutation("/state/reset", { method: "POST" }, () => initialState);
     if (typeof window !== "undefined") {
@@ -363,17 +671,23 @@ export function useClipPartnerStore() {
     metrics,
     isHydrated,
     syncStatus,
+    refreshRemoteList,
     updateAuthorizationStatus,
     addAuthorizationRequest,
     addMaterial,
+    addProduct,
+    updateProductStatus,
     uploadRecording,
     updateMaterialStatus,
+    bindMaterialProduct,
     claimMaterial,
     submitPublishLink,
     updatePublishStatus,
     importPerformance,
     generateSettlement,
     updateSettlementStatus,
+    addRiskRecord,
+    updateRiskStatus,
     resetDemoData
   };
 }

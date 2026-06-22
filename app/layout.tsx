@@ -1,4 +1,7 @@
 import type { Metadata } from "next";
+import { Analytics } from "@vercel/analytics/next";
+import { SpeedInsights } from "@vercel/speed-insights/next";
+import { ClientObservability } from "@/components/ClientObservability";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -13,7 +16,12 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="zh-CN">
-      <body>{children}</body>
+      <body>
+        {children}
+        <ClientObservability />
+        <Analytics />
+        <SpeedInsights />
+      </body>
     </html>
   );
 }

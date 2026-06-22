@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { Check, Link2, Search, Upload, X } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
@@ -7,9 +8,42 @@ import { StatusBadge } from "@/components/Badge";
 import { money } from "@/lib/domain";
 import { useClipPartnerStore } from "@/lib/local-store";
 
+function samplePerformance(index: number) {
+  const gmv = 3600 + index * 1280;
+  return {
+    gmv,
+    commission: Math.round(gmv * 0.15)
+  };
+}
+
 export default function PublishRecordsPage() {
-  const { state, importPerformance, updatePublishStatus } = useClipPartnerStore();
-  const publishRecords = state.publishRecords;
+  const { state, importPerformance, updatePublishStatus, syncStatus, refreshRemoteList } = useClipPartnerStore();
+  const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void refreshRemoteList("publishRecords", {
+        q: query,
+        status: statusFilter,
+        limit: 50
+      });
+    }, 250);
+
+    return () => window.clearTimeout(timer);
+  }, [query, refreshRemoteList, statusFilter]);
+
+  const publishRecords = state.publishRecords.filter((record) => {
+    const keyword = query.trim().toLowerCase();
+    const matchesKeyword =
+      !keyword ||
+      [record.distributorName, record.materialTitle, record.productName, record.platform]
+        .join(" ")
+        .toLowerCase()
+        .includes(keyword);
+    const matchesStatus = statusFilter === "all" || record.status === statusFilter;
+    return matchesKeyword && matchesStatus;
+  });
 
   return (
     <AppShell active="/admin/publish-records">
@@ -27,26 +61,41 @@ export default function PublishRecordsPage() {
               }
             }}
           >
-            <Upload size={16} aria-hidden /> 导入表现数据
+            <Upload size={16} aria-hidden /> 导入首条待处理数据
           </button>
         }
       />
 
       <div className="filter-bar">
-        <div className="input" style={{ minWidth: 280 }}>
-          <Search size={16} aria-hidden /> 搜索分发者 / 素材
-        </div>
-        <select className="select" defaultValue="submitted" aria-label="发布状态">
+        <label className="input search-control" style={{ minWidth: 280 }}>
+          <Search size={16} aria-hidden />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="搜索分发者 / 素材"
+          />
+        </label>
+        <select
+          className="select"
+          value={statusFilter}
+          onChange={(event) => setStatusFilter(event.target.value)}
+          aria-label="发布状态"
+        >
+          <option value="all">全部状态</option>
+          <option value="downloaded">已下载</option>
           <option value="submitted">待审核</option>
           <option value="verified">已核验</option>
           <option value="invalid">不合规</option>
         </select>
+        <span className={syncStatus === "remote" ? "badge success" : syncStatus === "error" ? "badge danger" : "badge"}>
+          {syncStatus === "remote" ? "已连接线上数据" : syncStatus === "syncing" ? "同步中" : syncStatus === "error" ? "同步失败" : "本地模式"}
+        </span>
       </div>
 
       <section className="table-card">
         <div className="table-header">
           <h2 className="table-title">发布记录</h2>
-          <span className="badge info">支持先手动回填，后续再接平台接口</span>
+          <span className="badge info">支持单条导入表现数据，后续可升级为 CSV / Excel 导入</span>
         </div>
         <table className="data-table">
           <thead>
@@ -62,50 +111,61 @@ export default function PublishRecordsPage() {
             </tr>
           </thead>
           <tbody>
-            {publishRecords.map((record) => (
-              <tr key={record.id}>
-                <td>{record.distributorName}</td>
-                <td>{record.materialTitle}</td>
-                <td>{record.productName}</td>
-                <td>{record.platform}</td>
-                <td>{record.submittedAt}</td>
-                <td>
-                  <StatusBadge status={record.status} />
-                </td>
-                <td>
-                  <div className="item-title">{money(record.gmv)}</div>
-                  <div className="item-meta">佣金 {money(record.commission)}</div>
-                </td>
-                <td>
-                  <div className="toolbar">
-                    <button
-                      className="button"
-                      title="回填链接"
-                      aria-label="回填链接"
-                      onClick={() => updatePublishStatus(record.id, "submitted")}
-                    >
-                      <Link2 size={16} aria-hidden />
-                    </button>
-                    <button
-                      className="button"
-                      title="核验通过"
-                      aria-label="核验通过"
-                      onClick={() => updatePublishStatus(record.id, "verified")}
-                    >
-                      <Check size={16} aria-hidden />
-                    </button>
-                    <button
-                      className="button"
-                      title="标记不合规"
-                      aria-label="标记不合规"
-                      onClick={() => updatePublishStatus(record.id, "invalid")}
-                    >
-                      <X size={16} aria-hidden />
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
+            {publishRecords.map((record, index) => {
+              const performance = samplePerformance(index);
+              return (
+                <tr key={record.id}>
+                  <td>{record.distributorName}</td>
+                  <td>{record.materialTitle}</td>
+                  <td>{record.productName}</td>
+                  <td>{record.platform}</td>
+                  <td>{record.submittedAt}</td>
+                  <td>
+                    <StatusBadge status={record.status} />
+                  </td>
+                  <td>
+                    <div className="item-title">{money(record.gmv)}</div>
+                    <div className="item-meta">佣金 {money(record.commission)}</div>
+                  </td>
+                  <td>
+                    <div className="toolbar">
+                      <button
+                        className="button"
+                        title="回填链接"
+                        aria-label="回填链接"
+                        onClick={() => updatePublishStatus(record.id, "submitted")}
+                      >
+                        <Link2 size={16} aria-hidden />
+                      </button>
+                      <button
+                        className="button"
+                        title={`导入 ${money(performance.gmv)} GMV`}
+                        aria-label="导入表现数据"
+                        onClick={() => importPerformance(record.id, performance.gmv, performance.commission)}
+                      >
+                        <Upload size={16} aria-hidden />
+                      </button>
+                      <button
+                        className="button"
+                        title="核验通过"
+                        aria-label="核验通过"
+                        onClick={() => updatePublishStatus(record.id, "verified")}
+                      >
+                        <Check size={16} aria-hidden />
+                      </button>
+                      <button
+                        className="button"
+                        title="标记不合规"
+                        aria-label="标记不合规"
+                        onClick={() => updatePublishStatus(record.id, "invalid")}
+                      >
+                        <X size={16} aria-hidden />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </section>

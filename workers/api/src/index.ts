@@ -1,17 +1,21 @@
 /// <reference types="@cloudflare/workers-types" />
 
-type PlatformLabel = "抖音" | "视频号";
+import { AwsClient } from "aws4fetch";
+import { z } from "zod";
+
+type PlatformLabel = "鎶栭煶" | "瑙嗛鍙?;
 type PlatformValue = "douyin" | "wechat_channels";
 
 type AuthorizationStatus = "pending" | "approved" | "rejected" | "paused" | "banned" | "expired";
 type MaterialStatus = "draft" | "processing" | "ready" | "published" | "archived";
 type PublishStatus = "claimed" | "downloaded" | "submitted" | "verified" | "invalid" | "settled";
 type SettlementStatus = "pending" | "confirmed" | "paid" | "blocked";
+type RiskStatus = "pending" | "open" | "warning" | "blocked" | "resolved";
 
 type AuthorizationRequestInput = {
   distributorName: string;
   socialAccount: string;
-  platform: PlatformLabel;
+  platform: string;
   ipName: string;
   reason: string;
 };
@@ -19,46 +23,202 @@ type AuthorizationRequestInput = {
 type MaterialInput = {
   title: string;
   ipName: string;
-  sourcePlatform: PlatformLabel;
+  sourcePlatform: string;
   productName: string;
+};
+
+type ProductInput = {
+  name: string;
+  platform: string;
+  affiliateUrl: string;
+  commissionRate: number;
+};
+
+type RiskRecordInput = {
+  platform: string;
+  account: string;
+  issue: string;
+  workUrl: string;
+};
+
+type DirectUploadInitInput = {
+  title: string;
+  ipName: string;
+  sourcePlatform: string;
+  fileName: string;
+  contentType?: string;
+  size?: number;
+};
+
+type DirectUploadCompleteInput = {
+  uploadId: string;
+  key: string;
+  title: string;
+  ipName: string;
+  sourcePlatform: string;
 };
 
 type RecordingUploadMeta = {
   title: string;
   ipName: string;
-  sourcePlatform: PlatformLabel;
+  sourcePlatform: string;
 };
 
-export interface Env {
-  APP_ENV: string;
+type RecordingUploadResult = {
+  recordingId: string;
+  clipAssetId: string;
+  r2Key: string;
+  meta: RecordingUploadMeta;
+};
+
+type ClipTaskPayload = {
+  type: "clip.create" | "cron.scan";
+  taskId: string;
+  recordingId?: string;
+  clipAssetId?: string;
+  r2Key?: string;
+  meta?: RecordingUploadMeta;
+  createdAt: string;
+};
+
+type ListOptions = {
+  limit: number;
+  offset: number;
+  q?: string;
+  status?: string;
+  platform?: PlatformValue;
+};
+
+type ListMeta = {
+  limit: number;
+  offset: number;
+  count: number;
+  nextOffset: number | null;
+};
+
+type WorkerEnv = Cloudflare.Env & {
   FRONTEND_ORIGIN: string;
-  NEXT_PUBLIC_SUPABASE_URL?: string;
-  NEXT_PUBLIC_SUPABASE_ANON_KEY?: string;
-  SUPABASE_SERVICE_ROLE_KEY?: string;
-  WECHAT_OAUTH_APP_ID?: string;
-  WECHAT_OAUTH_APP_SECRET?: string;
-  WECHAT_OAUTH_REDIRECT_URI?: string;
-  FFMPEG_WORKER_ENDPOINT?: string;
-  FFMPEG_WORKER_TOKEN?: string;
+  NEXT_PUBLIC_SUPABASE_URL: string;
+  SUPABASE_SERVICE_ROLE_KEY: string;
+  R2_ACCOUNT_ID?: string;
+  R2_ACCESS_KEY_ID?: string;
+  R2_SECRET_ACCESS_KEY?: string;
+  R2_BUCKET_NAME?: string;
   CLIP_PARTNER_BUCKET: R2Bucket;
   CLIP_TASK_QUEUE: Queue;
-}
+};
 
 const jsonHeaders = {
   "content-type": "application/json; charset=utf-8"
 };
 
+class ApiError extends Error {
+  constructor(
+    public code: string,
+    message: string,
+    public status = 400,
+    public details?: unknown
+  ) {
+    super(message);
+  }
+}
+
+const platformSchema = z.union([z.literal("douyin"), z.literal("wechat_channels"), z.literal("鎶栭煶"), z.literal("瑙嗛鍙?)]);
+const nonEmptyString = z.string().trim().min(1).max(500);
+const uuidSchema = z.string().uuid();
+
+const authorizationRequestSchema = z.object({
+  distributorName: nonEmptyString.max(80),
+  socialAccount: nonEmptyString.max(120),
+  platform: platformSchema,
+  ipName: nonEmptyString.max(120),
+  reason: nonEmptyString.max(500)
+});
+
+const materialSchema = z.object({
+  title: nonEmptyString.max(160),
+  ipName: nonEmptyString.max(120),
+  sourcePlatform: platformSchema,
+  productName: nonEmptyString.max(160)
+});
+
+const productSchema = z.object({
+  name: nonEmptyString.max(160),
+  platform: platformSchema,
+  affiliateUrl: z.url().max(1000),
+  commissionRate: z.coerce.number().min(0).max(100)
+});
+
+const riskRecordSchema = z.object({
+  platform: platformSchema,
+  account: nonEmptyString.max(120),
+  issue: nonEmptyString.max(500),
+  workUrl: z.url().max(1000)
+});
+
+const statusSchemas = {
+  authorization: z.object({ status: z.enum(["pending", "approved", "rejected", "paused", "banned", "expired"]) }),
+  material: z.object({ status: z.enum(["draft", "processing", "ready", "published", "archived"]) }),
+  publish: z.object({ status: z.enum(["claimed", "downloaded", "submitted", "verified", "invalid", "settled"]) }),
+  settlement: z.object({ status: z.enum(["pending", "confirmed", "paid", "blocked"]) }),
+  risk: z.object({ status: z.enum(["pending", "open", "warning", "blocked", "resolved"]) }),
+  product: z.object({ isActive: z.boolean() })
+};
+
+const directUploadInitSchema = z.object({
+  title: nonEmptyString.max(160),
+  ipName: nonEmptyString.max(120),
+  sourcePlatform: platformSchema,
+  fileName: nonEmptyString.max(240),
+  contentType: z.string().trim().max(120).optional(),
+  size: z.coerce.number().int().positive().max(1024 * 1024 * 1024).optional()
+});
+
+const directUploadCompleteSchema = z.object({
+  uploadId: uuidSchema,
+  key: nonEmptyString.max(500),
+  title: nonEmptyString.max(160),
+  ipName: nonEmptyString.max(120),
+  sourcePlatform: platformSchema
+});
+
+const submitPublishSchema = z.object({
+  publishUrl: z.url().max(1000).optional()
+});
+
+const performanceSchema = z.object({
+  gmv: z.coerce.number().min(0).max(999999999),
+  commission: z.coerce.number().min(0).max(999999999)
+});
+
+const claimSchema = z.object({
+  distributorName: z.string().trim().min(1).max(80).optional()
+});
+
+const materialProductSchema = z.object({
+  productId: uuidSchema
+});
+
 const platformToValue: Record<PlatformLabel, PlatformValue> = {
-  抖音: "douyin",
-  视频号: "wechat_channels"
+  鎶栭煶: "douyin",
+  瑙嗛鍙? "wechat_channels"
 };
 
 const platformToLabel: Record<PlatformValue, PlatformLabel> = {
-  douyin: "抖音",
-  wechat_channels: "视频号"
+  douyin: "鎶栭煶",
+  wechat_channels: "瑙嗛鍙?
 };
 
-function corsHeaders(env: Env) {
+function toPlatformValue(value: string | undefined): PlatformValue {
+  if (value === "wechat_channels" || value === "瑙嗛鍙?) return "wechat_channels";
+  return "douyin";
+}
+
+function toPlatformLabel(value: string | undefined): PlatformLabel {
+  return toPlatformValue(value) === "wechat_channels" ? "瑙嗛鍙? : "鎶栭煶";
+}
+
+function corsHeaders(env: WorkerEnv) {
   return {
     "access-control-allow-origin": env.FRONTEND_ORIGIN || "*",
     "access-control-allow-methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
@@ -66,7 +226,7 @@ function corsHeaders(env: Env) {
   };
 }
 
-function json(data: unknown, env: Env, init: ResponseInit = {}) {
+function json(data: unknown, env: WorkerEnv, init: ResponseInit = {}) {
   return new Response(JSON.stringify(data), {
     ...init,
     headers: {
@@ -77,9 +237,59 @@ function json(data: unknown, env: Env, init: ResponseInit = {}) {
   });
 }
 
-function requireSupabase(env: Env) {
+function errorJson(error: unknown, env: WorkerEnv) {
+  if (error instanceof ApiError) {
+    return json(
+      {
+        error: {
+          code: error.code,
+          message: error.message,
+          details: error.details
+        }
+      },
+      env,
+      { status: error.status }
+    );
+  }
+
+  return json(
+    {
+      error: {
+        code: "internal_error",
+        message: error instanceof Error ? error.message : "Unknown error"
+      }
+    },
+    env,
+    { status: 500 }
+  );
+}
+
+function logError(request: Request, error: unknown) {
+  console.error(
+    JSON.stringify({
+      level: "error",
+      path: new URL(request.url).pathname,
+      message: error instanceof Error ? error.message : "Unknown error"
+    })
+  );
+}
+
+async function readJson<T>(request: Request, schema: z.ZodType<T>) {
+  const body = await request.json().catch(() => {
+    throw new ApiError("invalid_json", "Request body must be valid JSON", 400);
+  });
+  const parsed = schema.safeParse(body);
+
+  if (!parsed.success) {
+    throw new ApiError("validation_error", "Request body validation failed", 422, z.flattenError(parsed.error));
+  }
+
+  return parsed.data;
+}
+
+function requireSupabase(env: WorkerEnv) {
   if (!env.NEXT_PUBLIC_SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) {
-    throw new Error("Supabase is not configured");
+    throw new ApiError("supabase_not_configured", "Supabase is not configured", 503);
   }
 
   return {
@@ -88,7 +298,7 @@ function requireSupabase(env: Env) {
   };
 }
 
-async function supabase<T>(env: Env, path: string, init: RequestInit = {}): Promise<T> {
+async function supabase<T>(env: WorkerEnv, path: string, init: RequestInit = {}): Promise<T> {
   const { restUrl, serviceKey } = requireSupabase(env);
   const response = await fetch(`${restUrl}${path}`, {
     ...init,
@@ -112,11 +322,11 @@ async function supabase<T>(env: Env, path: string, init: RequestInit = {}): Prom
   return response.json() as Promise<T>;
 }
 
-async function selectRows<T>(env: Env, table: string, query = "select=*") {
+async function selectRows<T>(env: WorkerEnv, table: string, query = "select=*") {
   return supabase<T[]>(env, `/${table}?${query}`);
 }
 
-async function insertRow<T>(env: Env, table: string, body: Record<string, unknown>) {
+async function insertRow<T>(env: WorkerEnv, table: string, body: Record<string, unknown>) {
   return supabase<T[]>(env, `/${table}`, {
     method: "POST",
     headers: { prefer: "return=representation" },
@@ -124,7 +334,7 @@ async function insertRow<T>(env: Env, table: string, body: Record<string, unknow
   }).then((rows) => rows[0]);
 }
 
-async function patchRows<T>(env: Env, table: string, filter: string, body: Record<string, unknown>) {
+async function patchRows<T>(env: WorkerEnv, table: string, filter: string, body: Record<string, unknown>) {
   return supabase<T[]>(env, `/${table}?${filter}`, {
     method: "PATCH",
     headers: { prefer: "return=representation" },
@@ -132,7 +342,13 @@ async function patchRows<T>(env: Env, table: string, filter: string, body: Recor
   });
 }
 
-async function deleteRows(env: Env, table: string) {
+async function deleteByFilter(env: WorkerEnv, table: string, filter: string) {
+  await supabase<void>(env, `/${table}?${filter}`, {
+    method: "DELETE"
+  });
+}
+
+async function deleteRows(env: WorkerEnv, table: string) {
   await supabase<void>(env, `/${table}?id=not.is.null`, {
     method: "DELETE"
   });
@@ -146,7 +362,62 @@ function first<T>(rows: T[]) {
   return rows[0];
 }
 
-async function findOrCreateDistributor(env: Env, displayName: string, phone = "待绑定") {
+function countBy<T>(items: T[], getKey: (item: T) => string | null | undefined) {
+  const counts = new Map<string, number>();
+  items.forEach((item) => {
+    const key = getKey(item);
+    if (!key) return;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  });
+  return counts;
+}
+
+function listOptions(params: URLSearchParams): ListOptions {
+  const limit = Math.min(Math.max(Number(params.get("limit")) || 50, 1), 100);
+  const offset = Math.max(Number(params.get("offset")) || 0, 0);
+  const q = params.get("q")?.trim().slice(0, 80) || undefined;
+  const status = params.get("status")?.trim().slice(0, 40) || undefined;
+  const platformParam = params.get("platform")?.trim();
+  const platform =
+    platformParam === "douyin" || platformParam === "鎶栭煶"
+      ? "douyin"
+      : platformParam === "wechat_channels" || platformParam === "瑙嗛鍙?
+        ? "wechat_channels"
+        : undefined;
+
+  return { limit, offset, q, status, platform };
+}
+
+function listMeta<T>(items: T[], options: ListOptions): ListMeta {
+  return {
+    limit: options.limit,
+    offset: options.offset,
+    count: items.length,
+    nextOffset: items.length === options.limit ? options.offset + options.limit : null
+  };
+}
+
+function filterParam(column: string, operator: string, value: string) {
+  return `${column}=${operator}.${encodeURIComponent(value)}`;
+}
+
+function rangeQuery(options: ListOptions) {
+  return `limit=${options.limit}&offset=${options.offset}`;
+}
+
+function searchQuery(columns: string[], value: string | undefined) {
+  if (!value) return undefined;
+  const safeValue = value.replace(/[*,()]/g, " ").replace(/\s+/g, " ").trim();
+  if (!safeValue) return undefined;
+
+  return `or=${encodeURIComponent(`(${columns.map((column) => `${column}.ilike.*${safeValue}*`).join(",")})`)}`;
+}
+
+function buildListQuery(select: string, order: string, options: ListOptions, filters: Array<string | undefined>) {
+  return [select, order, rangeQuery(options), ...filters].filter(Boolean).join("&");
+}
+
+async function findOrCreateDistributor(env: WorkerEnv, displayName: string, phone = "寰呯粦瀹?) {
   const existing = await selectRows<{ id: string }>(
     env,
     "distributor_profiles",
@@ -162,23 +433,23 @@ async function findOrCreateDistributor(env: Env, displayName: string, phone = "�
   });
 }
 
-async function findOrCreateIp(env: Env, name: string, platform: PlatformLabel) {
+async function findOrCreateIp(env: WorkerEnv, name: string, platform: string) {
   const existing = await selectRows<{ id: string }>(env, "ip_accounts", `select=id&${eq("name", name)}&limit=1`);
   if (first(existing)) return first(existing);
 
   return insertRow<{ id: string }>(env, "ip_accounts", {
     name,
-    platform: platformToValue[platform],
-    description: `${name} 直播切片 IP`,
+    platform: toPlatformValue(platform),
+    description: `${name} 鐩存挱鍒囩墖 IP`,
     default_share_rate: 50
   });
 }
 
 async function findOrCreateSocialAccount(
-  env: Env,
+  env: WorkerEnv,
   distributorId: string,
   accountName: string,
-  platform: PlatformLabel
+  platform: string
 ) {
   const existing = await selectRows<{ id: string }>(
     env,
@@ -189,24 +460,34 @@ async function findOrCreateSocialAccount(
 
   return insertRow<{ id: string }>(env, "social_accounts", {
     distributor_id: distributorId,
-    platform: platformToValue[platform],
+    platform: toPlatformValue(platform),
     account_name: accountName
   });
 }
 
-async function findOrCreateProduct(env: Env, name: string, platform: PlatformLabel) {
+async function findOrCreateProduct(env: WorkerEnv, name: string, platform: string) {
   const existing = await selectRows<{ id: string }>(env, "products", `select=id&${eq("name", name)}&limit=1`);
   if (first(existing)) return first(existing);
 
   return insertRow<{ id: string }>(env, "products", {
     name,
-    platform: platformToValue[platform],
+    platform: toPlatformValue(platform),
     affiliate_url: "https://example.com/product",
     commission_rate: 15
   });
 }
 
-async function createAuthorizationRequest(env: Env, input: AuthorizationRequestInput) {
+async function createProduct(env: WorkerEnv, input: ProductInput) {
+  await insertRow(env, "products", {
+    name: input.name,
+    platform: toPlatformValue(input.platform),
+    affiliate_url: input.affiliateUrl,
+    commission_rate: input.commissionRate,
+    is_active: true
+  });
+}
+
+async function createAuthorizationRequest(env: WorkerEnv, input: AuthorizationRequestInput) {
   const distributor = await findOrCreateDistributor(env, input.distributorName);
   const ip = await findOrCreateIp(env, input.ipName, input.platform);
   const social = await findOrCreateSocialAccount(env, distributor.id, input.socialAccount, input.platform);
@@ -220,14 +501,14 @@ async function createAuthorizationRequest(env: Env, input: AuthorizationRequestI
   });
 }
 
-async function createMaterial(env: Env, input: MaterialInput) {
+async function createMaterial(env: WorkerEnv, input: MaterialInput) {
   const ip = await findOrCreateIp(env, input.ipName, input.sourcePlatform);
   const product = await findOrCreateProduct(env, input.productName, input.sourcePlatform);
   const clip = await insertRow<{ id: string }>(env, "clip_assets", {
     ip_account_id: ip.id,
     title: input.title,
     status: "processing",
-    tags: ["待标注"],
+    tags: ["寰呮爣娉?],
     start_second: 0,
     end_second: 0
   });
@@ -247,20 +528,53 @@ function safeFileName(name: string) {
     .slice(0, 120);
 }
 
-async function uploadRecording(env: Env, request: Request) {
+async function createRecordingAsset(env: WorkerEnv, meta: RecordingUploadMeta, key: string): Promise<RecordingUploadResult> {
+  const ip = await findOrCreateIp(env, meta.ipName, meta.sourcePlatform);
+  const recording = await insertRow<{ id: string }>(env, "live_recordings", {
+    ip_account_id: ip.id,
+    source_platform: toPlatformValue(meta.sourcePlatform),
+    live_date: new Date().toISOString().slice(0, 10),
+    title: meta.title,
+    r2_key: key
+  });
+
+  const clip = await insertRow<{ id: string }>(env, "clip_assets", {
+    live_recording_id: recording.id,
+    ip_account_id: ip.id,
+    title: `${meta.title} - 寰呭垏鐗嘸,
+    status: "processing",
+    tags: ["褰曞睆涓婁紶", "寰呭垏鐗?],
+    start_second: 0,
+    end_second: 0
+  });
+
+  return {
+    recordingId: recording.id,
+    clipAssetId: clip.id,
+    r2Key: key,
+    meta
+  };
+}
+
+async function uploadRecording(env: WorkerEnv, request: Request): Promise<RecordingUploadResult> {
   const form = await request.formData();
   const file = form.get("file");
   if (!(file instanceof File)) {
-    throw new Error("Missing recording file");
+    throw new ApiError("missing_recording_file", "Missing recording file", 400);
   }
 
   const meta: RecordingUploadMeta = {
-    title: String(form.get("title") || file.name || "上传录屏待切片"),
-    ipName: String(form.get("ipName") || "晴姐穿搭"),
-    sourcePlatform: String(form.get("sourcePlatform") || "视频号") as PlatformLabel
+    title: String(form.get("title") || file.name || "涓婁紶褰曞睆寰呭垏鐗?),
+    ipName: String(form.get("ipName") || "鏅村绌挎惌"),
+    sourcePlatform: String(form.get("sourcePlatform") || "瑙嗛鍙?)
   };
+  const parsed = directUploadInitSchema
+    .pick({ title: true, ipName: true, sourcePlatform: true })
+    .safeParse(meta);
+  if (!parsed.success) {
+    throw new ApiError("validation_error", "Upload metadata validation failed", 422, z.flattenError(parsed.error));
+  }
 
-  const ip = await findOrCreateIp(env, meta.ipName, meta.sourcePlatform);
   const key = `recordings/${new Date().toISOString().slice(0, 10)}/${crypto.randomUUID()}-${safeFileName(file.name)}`;
 
   await env.CLIP_PARTNER_BUCKET.put(key, file.stream(), {
@@ -270,30 +584,142 @@ async function uploadRecording(env: Env, request: Request) {
     customMetadata: {
       title: meta.title,
       ipName: meta.ipName,
-      sourcePlatform: platformToValue[meta.sourcePlatform]
+      sourcePlatform: toPlatformValue(meta.sourcePlatform)
     }
   });
 
-  const recording = await insertRow<{ id: string }>(env, "live_recordings", {
-    ip_account_id: ip.id,
-    source_platform: platformToValue[meta.sourcePlatform],
-    live_date: new Date().toISOString().slice(0, 10),
-    title: meta.title,
-    r2_key: key
+  return createRecordingAsset(env, meta, key);
+}
+
+function requireR2Signing(env: WorkerEnv) {
+  const missing = ["R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET_NAME"].filter(
+    (key) => !env[key as keyof WorkerEnv]
+  );
+  if (missing.length) {
+    throw new ApiError("r2_signing_not_configured", "R2 direct upload signing is not configured", 503, { missing });
+  }
+
+  return {
+    accountId: env.R2_ACCOUNT_ID as string,
+    accessKeyId: env.R2_ACCESS_KEY_ID as string,
+    secretAccessKey: env.R2_SECRET_ACCESS_KEY as string,
+    bucketName: env.R2_BUCKET_NAME as string
+  };
+}
+
+async function createDirectUpload(env: WorkerEnv, input: DirectUploadInitInput) {
+  const config = requireR2Signing(env);
+  const uploadId = crypto.randomUUID();
+  const contentType = input.contentType || "application/octet-stream";
+  const key = `recordings/uploads/${new Date().toISOString().slice(0, 10)}/${uploadId}-${safeFileName(input.fileName)}`;
+  const url = `https://${config.accountId}.r2.cloudflarestorage.com/${config.bucketName}/${key}`;
+  const signer = new AwsClient({
+    accessKeyId: config.accessKeyId,
+    secretAccessKey: config.secretAccessKey,
+    service: "s3",
+    region: "auto",
+    retries: 0
+  });
+  const signed = await signer.sign(url, {
+    method: "PUT",
+    headers: {
+      "content-type": contentType
+    },
+    aws: {
+      signQuery: true,
+      allHeaders: true
+    }
   });
 
-  await insertRow(env, "clip_assets", {
-    live_recording_id: recording.id,
-    ip_account_id: ip.id,
-    title: `${meta.title} - 待切片`,
-    status: "processing",
-    tags: ["录屏上传", "待切片"],
-    start_second: 0,
-    end_second: 0
+  return {
+    uploadId,
+    key,
+    uploadUrl: signed.url,
+    method: "PUT",
+    expiresIn: 900,
+    expiresAt: new Date(Date.now() + 900 * 1000).toISOString(),
+    headers: {
+      "content-type": contentType
+    }
+  };
+}
+
+async function completeDirectUpload(env: WorkerEnv, input: DirectUploadCompleteInput) {
+  if (!input.key.startsWith("recordings/uploads/") || !input.key.includes(input.uploadId)) {
+    throw new ApiError("invalid_upload_key", "Upload key does not match the upload session", 400);
+  }
+
+  const object = await env.CLIP_PARTNER_BUCKET.head(input.key);
+  if (!object) {
+    throw new ApiError("upload_not_found", "Uploaded object was not found in R2", 404);
+  }
+
+  return createRecordingAsset(
+    env,
+    {
+      title: input.title,
+      ipName: input.ipName,
+      sourcePlatform: input.sourcePlatform
+    },
+    input.key
+  );
+}
+
+async function createClipTask(env: WorkerEnv, upload: RecordingUploadResult) {
+  const dedupeKey = `clip.create:${upload.clipAssetId}`;
+  try {
+    const existing = await selectRows<{ id: string }>(env, "clip_tasks", `select=id&${eq("dedupe_key", dedupeKey)}&limit=1`);
+    if (first(existing)) {
+      return first(existing).id;
+    }
+
+    const task = await insertRow<{ id: string }>(env, "clip_tasks", {
+      type: "clip.create",
+      dedupe_key: dedupeKey,
+      recording_id: upload.recordingId,
+      clip_asset_id: upload.clipAssetId,
+      r2_key: upload.r2Key,
+      status: "queued",
+      payload: upload
+    });
+    return task.id;
+  } catch (error) {
+    console.warn(
+      JSON.stringify({
+        level: "warn",
+        message: "clip_tasks table unavailable; queueing without persistent task record",
+        detail: error instanceof Error ? error.message : "Unknown error"
+      })
+    );
+    return dedupeKey;
+  }
+}
+
+async function queueClipTask(env: WorkerEnv, upload: RecordingUploadResult) {
+  const taskId = await createClipTask(env, upload);
+  const payload: ClipTaskPayload = {
+    type: "clip.create",
+    taskId,
+    recordingId: upload.recordingId,
+    clipAssetId: upload.clipAssetId,
+    r2Key: upload.r2Key,
+    meta: upload.meta,
+    createdAt: new Date().toISOString()
+  };
+
+  return env.CLIP_TASK_QUEUE.send(payload);
+}
+
+async function bindProductToMaterial(env: WorkerEnv, clipAssetId: string, productId: string) {
+  await deleteByFilter(env, "clip_products", `clip_asset_id=eq.${clipAssetId}`);
+  await insertRow(env, "clip_products", {
+    clip_asset_id: clipAssetId,
+    product_id: productId,
+    is_primary: true
   });
 }
 
-async function claimMaterial(env: Env, clipAssetId: string, distributorName = "周婧") {
+async function claimMaterial(env: WorkerEnv, clipAssetId: string, distributorName = "鍛ㄥ┃") {
   const clipRows = await selectRows<{
     id: string;
     title: string;
@@ -313,13 +739,13 @@ async function claimMaterial(env: Env, clipAssetId: string, distributorName = "�
   if (!productId) throw new Error("Clip asset has no product");
 
   const distributor = await findOrCreateDistributor(env, distributorName, "186****7108");
-  const social = await findOrCreateSocialAccount(env, distributor.id, "小周好物局", platform);
+  const social = await findOrCreateSocialAccount(env, distributor.id, "灏忓懆濂界墿灞€", platform);
   const claim = await insertRow<{ id: string }>(env, "clip_claims", {
     distributor_id: distributor.id,
     clip_asset_id: clip.id,
     product_id: productId,
     social_account_id: social.id,
-    planned_platform: platformToValue[platform]
+    planned_platform: toPlatformValue(platform)
   });
 
   await insertRow(env, "clip_downloads", {
@@ -334,13 +760,13 @@ async function claimMaterial(env: Env, clipAssetId: string, distributorName = "�
     distributor_id: distributor.id,
     clip_asset_id: clip.id,
     product_id: productId,
-    platform: platformToValue[platform],
-    publish_url: "待回填",
+    platform: toPlatformValue(platform),
+    publish_url: "寰呭洖濉?,
     status: "downloaded"
   });
 }
 
-async function importPerformance(env: Env, publishRecordId: string, gmv: number, commission: number) {
+async function importPerformance(env: WorkerEnv, publishRecordId: string, gmv: number, commission: number) {
   await patchRows(env, "publish_records", `id=eq.${publishRecordId}`, {
     status: "verified",
     verified_at: new Date().toISOString()
@@ -352,7 +778,7 @@ async function importPerformance(env: Env, publishRecordId: string, gmv: number,
   });
 }
 
-async function generateSettlement(env: Env) {
+async function generateSettlement(env: WorkerEnv) {
   const records = await selectRows<{
     id: string;
     distributor_id: string;
@@ -368,7 +794,7 @@ async function generateSettlement(env: Env) {
     return sum + Number(latest?.commission_amount ?? 0) * 0.5;
   }, 0);
 
-  const distributor = records[0]?.distributor_id ?? (await findOrCreateDistributor(env, "本月汇总")).id;
+  const distributor = records[0]?.distributor_id ?? (await findOrCreateDistributor(env, "鏈湀姹囨€?)).id;
   await insertRow(env, "settlement_orders", {
     distributor_id: distributor,
     period: new Date().toISOString().slice(0, 7),
@@ -377,33 +803,45 @@ async function generateSettlement(env: Env) {
   });
 }
 
-async function listState(env: Env) {
-  let [authorizationRequests, materials, publishRecords, settlements] = await Promise.all([
-    listAuthorizationRequests(env),
-    listMaterials(env),
-    listPublishRecords(env),
-    listSettlements(env)
-  ]);
-
-  if (
-    authorizationRequests.length === 0 &&
-    materials.length === 0 &&
-    publishRecords.length === 0 &&
-    settlements.length === 0
-  ) {
-    await seedDemoData(env);
-    [authorizationRequests, materials, publishRecords, settlements] = await Promise.all([
+async function listState(env: WorkerEnv) {
+  async function readStateLists() {
+    const [authorizationRequests, materials, products, publishRecords, settlements, riskRecords] = await Promise.all([
       listAuthorizationRequests(env),
       listMaterials(env),
+      listProducts(env),
       listPublishRecords(env),
-      listSettlements(env)
+      listSettlements(env),
+      listRiskRecords(env)
     ]);
+
+    return {
+      authorizationRequests: authorizationRequests.items,
+      materials: materials.items,
+      products: products.items,
+      publishRecords: publishRecords.items,
+      settlements: settlements.items,
+      riskRecords: riskRecords.items
+    };
   }
 
-  return { authorizationRequests, materials, publishRecords, settlements };
+  let state = await readStateLists();
+
+  if (
+    state.authorizationRequests.length === 0 &&
+    state.materials.length === 0 &&
+    state.products.length === 0 &&
+    state.publishRecords.length === 0 &&
+    state.settlements.length === 0 &&
+    state.riskRecords.length === 0
+  ) {
+    await seedDemoData(env);
+    state = await readStateLists();
+  }
+
+  return state;
 }
 
-async function listAuthorizationRequests(env: Env) {
+async function listAuthorizationRequests(env: WorkerEnv, options = listOptions(new URLSearchParams())) {
   const rows = await selectRows<{
     id: string;
     status: AuthorizationStatus;
@@ -415,23 +853,76 @@ async function listAuthorizationRequests(env: Env) {
   }>(
     env,
     "authorization_requests",
-    "select=id,status,application_note,created_at,distributor_profiles(display_name,phone),ip_accounts(name),social_accounts(account_name,platform)&order=created_at.desc"
+    buildListQuery(
+      "select=id,status,application_note,created_at,distributor_profiles(display_name,phone),ip_accounts(name),social_accounts(account_name,platform)",
+      "order=created_at.desc",
+      options,
+      [options.status ? filterParam("status", "eq", options.status) : undefined]
+    )
   );
 
-  return rows.map((row) => ({
+  const authorizationRequests = rows.map((row) => ({
     id: row.id,
-    distributorName: row.distributor_profiles?.display_name ?? "未知分发者",
-    phone: row.distributor_profiles?.phone ?? "待绑定",
-    socialAccount: row.social_accounts?.account_name ?? "待绑定账号",
+    distributorName: row.distributor_profiles?.display_name ?? "鏈煡鍒嗗彂鑰?,
+    phone: row.distributor_profiles?.phone ?? "寰呯粦瀹?,
+    socialAccount: row.social_accounts?.account_name ?? "寰呯粦瀹氳处鍙?,
     platform: platformToLabel[row.social_accounts?.platform ?? "douyin"],
-    ipName: row.ip_accounts?.name ?? "未知 IP",
+    ipName: row.ip_accounts?.name ?? "鏈煡 IP",
     status: row.status,
     appliedAt: new Date(row.created_at).toLocaleString("zh-CN", { hour12: false }),
     reason: row.application_note ?? ""
   }));
+  return { items: authorizationRequests, meta: listMeta(authorizationRequests, options) };
 }
 
-async function listMaterials(env: Env) {
+async function listMaterials(env: WorkerEnv, options = listOptions(new URLSearchParams())) {
+  try {
+    const rows = await selectRows<{
+      id: string;
+      title: string;
+      ip_name: string | null;
+      source_platform: PlatformValue | null;
+      live_date: string;
+      duration_seconds: number | null;
+      tags: string[] | null;
+      product_name: string | null;
+      status: MaterialStatus;
+      claims: number | null;
+      downloads: number | null;
+      created_at: string;
+    }>(
+      env,
+      "material_summaries",
+      buildListQuery(
+        "select=id,title,ip_name,source_platform,live_date,duration_seconds,tags,product_name,status,claims,downloads,created_at",
+        "order=created_at.desc",
+        options,
+        [
+          options.status ? filterParam("status", "eq", options.status) : undefined,
+          options.platform ? filterParam("source_platform", "eq", options.platform) : undefined,
+          searchQuery(["title", "ip_name", "product_name"], options.q)
+        ]
+      )
+    );
+
+    const materials = rows.map((row) => ({
+      id: row.id,
+      title: row.title,
+      ipName: row.ip_name ?? "鏈煡 IP",
+      sourcePlatform: platformToLabel[row.source_platform ?? "douyin"],
+      liveDate: row.live_date,
+      duration: row.duration_seconds && row.duration_seconds > 0 ? `${row.duration_seconds}s` : "寰呭垏鐗?,
+      tags: row.tags?.length ? row.tags : ["寰呮爣娉?],
+      productName: row.product_name ?? "寰呯粦瀹氬晢鍝?,
+      status: row.status,
+      claims: Number(row.claims ?? 0),
+      downloads: Number(row.downloads ?? 0)
+    }));
+    return { items: materials, meta: listMeta(materials, options) };
+  } catch {
+    // Older databases may not have material_summaries yet; keep the MVP API usable.
+  }
+
   const [clips, claims, downloads] = await Promise.all([
     selectRows<{
       id: string;
@@ -446,31 +937,159 @@ async function listMaterials(env: Env) {
     }>(
       env,
       "clip_assets",
-      "select=id,title,status,tags,start_second,end_second,created_at,ip_accounts(name,platform),clip_products(products(name))&order=created_at.desc"
+      buildListQuery(
+        "select=id,title,status,tags,start_second,end_second,created_at,ip_accounts(name,platform),clip_products(products(name))",
+        "order=created_at.desc",
+        options,
+        [options.status ? filterParam("status", "eq", options.status) : undefined]
+      )
     ),
     selectRows<{ clip_asset_id: string }>(env, "clip_claims", "select=clip_asset_id"),
     selectRows<{ clip_asset_id: string }>(env, "clip_downloads", "select=clip_asset_id")
   ]);
 
-  return clips.map((clip) => ({
+  const claimsByClip = countBy(claims, (claim) => claim.clip_asset_id);
+  const downloadsByClip = countBy(downloads, (download) => download.clip_asset_id);
+
+  const materials = clips.map((clip) => ({
     id: clip.id,
     title: clip.title,
-    ipName: clip.ip_accounts?.name ?? "未知 IP",
+    ipName: clip.ip_accounts?.name ?? "鏈煡 IP",
     sourcePlatform: platformToLabel[clip.ip_accounts?.platform ?? "douyin"],
     liveDate: clip.created_at.slice(0, 10),
     duration:
       clip.end_second && clip.start_second && clip.end_second > clip.start_second
         ? `${clip.end_second - clip.start_second}s`
-        : "待切片",
-    tags: clip.tags?.length ? clip.tags : ["待标注"],
-    productName: clip.clip_products[0]?.products?.name ?? "待绑定商品",
+        : "寰呭垏鐗?,
+    tags: clip.tags?.length ? clip.tags : ["寰呮爣娉?],
+    productName: clip.clip_products[0]?.products?.name ?? "寰呯粦瀹氬晢鍝?,
     status: clip.status,
-    claims: claims.filter((claim) => claim.clip_asset_id === clip.id).length,
-    downloads: downloads.filter((download) => download.clip_asset_id === clip.id).length
+    claims: claimsByClip.get(clip.id) ?? 0,
+    downloads: downloadsByClip.get(clip.id) ?? 0
   }));
+  return { items: materials, meta: listMeta(materials, options) };
 }
 
-async function listPublishRecords(env: Env) {
+async function listProducts(env: WorkerEnv, options = listOptions(new URLSearchParams())) {
+  try {
+    const rows = await selectRows<{
+      id: string;
+      name: string;
+      platform: PlatformValue;
+      affiliate_url: string;
+      commission_rate: number | null;
+      is_active: boolean;
+      material_count: number | null;
+      created_at: string;
+    }>(
+      env,
+      "product_summaries",
+      buildListQuery(
+        "select=id,name,platform,affiliate_url,commission_rate,is_active,material_count,created_at",
+        "order=created_at.desc",
+        options,
+        [
+          options.platform ? filterParam("platform", "eq", options.platform) : undefined,
+          searchQuery(["name", "affiliate_url"], options.q)
+        ]
+      )
+    );
+
+    const products = rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      platform: platformToLabel[row.platform],
+      affiliateUrl: row.affiliate_url,
+      commissionRate: Number(row.commission_rate ?? 0),
+      isActive: row.is_active,
+      materialCount: Number(row.material_count ?? 0),
+      createdAt: row.created_at.slice(0, 10)
+    }));
+    return { items: products, meta: listMeta(products, options) };
+  } catch {
+    // Older databases may not have product_summaries yet; keep the MVP API usable.
+  }
+
+  const [rows, bindings] = await Promise.all([
+    selectRows<{
+      id: string;
+      name: string;
+      platform: PlatformValue;
+      affiliate_url: string;
+      commission_rate: number | null;
+      is_active: boolean;
+      created_at: string;
+    }>(
+      env,
+      "products",
+      buildListQuery(
+        "select=id,name,platform,affiliate_url,commission_rate,is_active,created_at",
+        "order=created_at.desc",
+        options,
+        [options.platform ? filterParam("platform", "eq", options.platform) : undefined]
+      )
+    ),
+    selectRows<{ product_id: string }>(env, "clip_products", "select=product_id")
+  ]);
+
+  const bindingsByProduct = countBy(bindings, (binding) => binding.product_id);
+
+  const products = rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    platform: platformToLabel[row.platform],
+    affiliateUrl: row.affiliate_url,
+    commissionRate: Number(row.commission_rate ?? 0),
+    isActive: row.is_active,
+    materialCount: bindingsByProduct.get(row.id) ?? 0,
+    createdAt: row.created_at.slice(0, 10)
+  }));
+  return { items: products, meta: listMeta(products, options) };
+}
+
+async function listPublishRecords(env: WorkerEnv, options = listOptions(new URLSearchParams())) {
+  try {
+    const rows = await selectRows<{
+      id: string;
+      distributor_name: string | null;
+      material_title: string | null;
+      product_name: string | null;
+      platform: PlatformValue;
+      status: PublishStatus;
+      submitted_at: string;
+      gmv: number | null;
+      commission: number | null;
+    }>(
+      env,
+      "publish_record_summaries",
+      buildListQuery(
+        "select=id,distributor_name,material_title,product_name,platform,status,submitted_at,gmv,commission",
+        "order=submitted_at.desc",
+        options,
+        [
+          options.status ? filterParam("status", "eq", options.status) : undefined,
+          options.platform ? filterParam("platform", "eq", options.platform) : undefined,
+          searchQuery(["distributor_name", "material_title", "product_name"], options.q)
+        ]
+      )
+    );
+
+    const publishRecords = rows.map((row) => ({
+      id: row.id,
+      distributorName: row.distributor_name ?? "鏈煡鍒嗗彂鑰?,
+      materialTitle: row.material_title ?? "鏈煡绱犳潗",
+      productName: row.product_name ?? "鏈煡鍟嗗搧",
+      platform: platformToLabel[row.platform],
+      status: row.status,
+      submittedAt: new Date(row.submitted_at).toLocaleString("zh-CN", { hour12: false }),
+      gmv: Number(row.gmv ?? 0),
+      commission: Number(row.commission ?? 0)
+    }));
+    return { items: publishRecords, meta: listMeta(publishRecords, options) };
+  } catch {
+    // Older databases may not have publish_record_summaries yet; keep the MVP API usable.
+  }
+
   const rows = await selectRows<{
     id: string;
     status: PublishStatus;
@@ -483,16 +1102,24 @@ async function listPublishRecords(env: Env) {
   }>(
     env,
     "publish_records",
-    "select=id,status,platform,submitted_at,distributor_profiles(display_name),clip_assets(title),products(name),performance_snapshots(gmv,commission_amount,captured_at)&order=submitted_at.desc"
+    buildListQuery(
+      "select=id,status,platform,submitted_at,distributor_profiles(display_name),clip_assets(title),products(name),performance_snapshots(gmv,commission_amount,captured_at)",
+      "order=submitted_at.desc",
+      options,
+      [
+        options.status ? filterParam("status", "eq", options.status) : undefined,
+        options.platform ? filterParam("platform", "eq", options.platform) : undefined
+      ]
+    )
   );
 
-  return rows.map((row) => {
+  const publishRecords = rows.map((row) => {
     const latest = row.performance_snapshots.at(-1);
     return {
       id: row.id,
-      distributorName: row.distributor_profiles?.display_name ?? "未知分发者",
-      materialTitle: row.clip_assets?.title ?? "未知素材",
-      productName: row.products?.name ?? "未知商品",
+      distributorName: row.distributor_profiles?.display_name ?? "鏈煡鍒嗗彂鑰?,
+      materialTitle: row.clip_assets?.title ?? "鏈煡绱犳潗",
+      productName: row.products?.name ?? "鏈煡鍟嗗搧",
       platform: platformToLabel[row.platform],
       status: row.status,
       submittedAt: new Date(row.submitted_at).toLocaleString("zh-CN", { hour12: false }),
@@ -500,9 +1127,46 @@ async function listPublishRecords(env: Env) {
       commission: Number(latest?.commission_amount ?? 0)
     };
   });
+  return { items: publishRecords, meta: listMeta(publishRecords, options) };
 }
 
-async function listSettlements(env: Env) {
+async function listSettlements(env: WorkerEnv, options = listOptions(new URLSearchParams())) {
+  try {
+    const rows = await selectRows<{
+      id: string;
+      distributor_name: string | null;
+      period: string;
+      verified_posts: number | null;
+      payable_commission: number | null;
+      status: SettlementStatus;
+      created_at: string;
+    }>(
+      env,
+      "settlement_summaries",
+      buildListQuery(
+        "select=id,distributor_name,period,verified_posts,payable_commission,status,created_at",
+        "order=created_at.desc",
+        options,
+        [
+          options.status ? filterParam("status", "eq", options.status) : undefined,
+          searchQuery(["distributor_name", "period"], options.q)
+        ]
+      )
+    );
+
+    const settlements = rows.map((row) => ({
+      id: row.id,
+      distributorName: row.distributor_name ?? "鏈湀姹囨€?,
+      period: row.period,
+      verifiedPosts: Number(row.verified_posts ?? 0),
+      payableCommission: Number(row.payable_commission ?? 0),
+      status: row.status
+    }));
+    return { items: settlements, meta: listMeta(settlements, options) };
+  } catch {
+    // Older databases may not have settlement_summaries yet; keep the MVP API usable.
+  }
+
   const rows = await selectRows<{
     id: string;
     period: string;
@@ -512,43 +1176,96 @@ async function listSettlements(env: Env) {
   }>(
     env,
     "settlement_orders",
-    "select=id,period,status,total_amount,distributor_profiles(display_name)&order=created_at.desc"
+    buildListQuery(
+      "select=id,period,status,total_amount,distributor_profiles(display_name)",
+      "order=created_at.desc",
+      options,
+      [options.status ? filterParam("status", "eq", options.status) : undefined]
+    )
   );
 
-  return rows.map((row) => ({
+  const settlements = rows.map((row) => ({
     id: row.id,
-    distributorName: row.distributor_profiles?.display_name ?? "本月汇总",
+    distributorName: row.distributor_profiles?.display_name ?? "鏈湀姹囨€?,
     period: row.period,
     verifiedPosts: 0,
     payableCommission: Number(row.total_amount),
     status: row.status
   }));
+  return { items: settlements, meta: listMeta(settlements, options) };
 }
 
-async function seedDemoData(env: Env) {
+async function listRiskRecords(env: WorkerEnv, options = listOptions(new URLSearchParams())) {
+  const rows = await selectRows<{
+    id: string;
+    platform: PlatformValue;
+    account_name: string;
+    work_url: string;
+    status: RiskStatus;
+    handling_note: string | null;
+    created_at: string;
+  }>(
+    env,
+    "violation_leads",
+    buildListQuery(
+      "select=id,platform,account_name,work_url,status,handling_note,created_at",
+      "order=created_at.desc",
+      options,
+      [
+        options.status ? filterParam("status", "eq", options.status) : undefined,
+        options.platform ? filterParam("platform", "eq", options.platform) : undefined,
+        searchQuery(["account_name", "work_url", "handling_note"], options.q)
+      ]
+    )
+  );
+
+  const riskRecords = rows.map((row) => ({
+    id: row.id,
+    platform: platformToLabel[row.platform],
+    account: row.account_name,
+    issue: row.handling_note ?? "寰呰ˉ鍏呰繚瑙勮鏄?,
+    workUrl: row.work_url,
+    status: row.status,
+    createdAt: new Date(row.created_at).toLocaleString("zh-CN", { hour12: false })
+  }));
+  return { items: riskRecords, meta: listMeta(riskRecords, options) };
+}
+
+async function createRiskRecord(env: WorkerEnv, input: RiskRecordInput) {
+  await insertRow(env, "violation_leads", {
+    platform: toPlatformValue(input.platform),
+    account_name: input.account,
+    work_url: input.workUrl,
+    is_authorized: null,
+    status: "open",
+    handling_note: input.issue
+  });
+}
+
+async function seedDemoData(env: WorkerEnv) {
   await createAuthorizationRequest(env, {
-    distributorName: "李晨",
-    socialAccount: "晨剪精选",
-    platform: "抖音",
-    ipName: "老许家居",
-    reason: "已有家居垂类账号，计划每日发布 3 条切片。"
+    distributorName: "鏉庢櫒",
+    socialAccount: "鏅ㄥ壀绮鹃€?,
+    platform: "鎶栭煶",
+    ipName: "鑰佽瀹跺眳",
+    reason: "宸叉湁瀹跺眳鍨傜被璐﹀彿锛岃鍒掓瘡鏃ュ彂甯?3 鏉″垏鐗囥€?
   });
   await createAuthorizationRequest(env, {
-    distributorName: "周婧",
-    socialAccount: "小周好物局",
-    platform: "视频号",
-    ipName: "晴姐穿搭",
-    reason: "视频号粉丝 1.8 万，女装转化稳定。"
+    distributorName: "鍛ㄥ┃",
+    socialAccount: "灏忓懆濂界墿灞€",
+    platform: "瑙嗛鍙?,
+    ipName: "鏅村绌挎惌",
+    reason: "瑙嗛鍙风矇涓?1.8 涓囷紝濂宠杞寲绋冲畾銆?
   });
   await createMaterial(env, {
-    title: "晴姐讲解夏季通勤套装三件套",
-    ipName: "晴姐穿搭",
-    sourcePlatform: "抖音",
-    productName: "冰感通勤套装"
+    title: "鏅村璁茶В澶忓閫氬嫟濂楄涓変欢濂?,
+    ipName: "鏅村绌挎惌",
+    sourcePlatform: "鎶栭煶",
+    productName: "鍐版劅閫氬嫟濂楄"
   });
 }
 
-async function resetState(env: Env) {
+async function resetState(env: WorkerEnv) {
   const tables = [
     "settlement_order_items",
     "settlement_orders",
@@ -574,11 +1291,23 @@ async function resetState(env: Env) {
   await seedDemoData(env);
 }
 
-function integrationStatus(env: Env) {
+function integrationStatus(env: WorkerEnv) {
   const groups = [
     {
       key: "supabase",
       required: ["NEXT_PUBLIC_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_ANON_KEY", "SUPABASE_SERVICE_ROLE_KEY"]
+    },
+    {
+      key: "cloudflareR2",
+      required: ["CLIP_PARTNER_BUCKET"]
+    },
+    {
+      key: "r2DirectUpload",
+      required: ["R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET_NAME"]
+    },
+    {
+      key: "cloudflareQueue",
+      required: ["CLIP_TASK_QUEUE"]
     },
     {
       key: "wechatOAuth",
@@ -591,12 +1320,12 @@ function integrationStatus(env: Env) {
   ];
 
   return groups.map((group) => {
-    const configured = group.required.filter((key) => Boolean(env[key as keyof Env]));
+    const configured = group.required.filter((key) => Boolean(env[key as keyof WorkerEnv]));
     return {
       key: group.key,
       configuredCount: configured.length,
       totalCount: group.required.length,
-      missingKeys: group.required.filter((key) => !env[key as keyof Env]),
+      missingKeys: group.required.filter((key) => !env[key as keyof WorkerEnv]),
       isConfigured: configured.length === group.required.length
     };
   });
@@ -607,7 +1336,7 @@ async function readBody<T>(request: Request) {
 }
 
 const worker = {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: WorkerEnv, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
     try {
@@ -627,67 +1356,141 @@ const worker = {
         return json(await listState(env), env);
       }
 
+      if (url.pathname === "/authorization-requests" && request.method === "GET") {
+        const { items, meta } = await listAuthorizationRequests(env, listOptions(url.searchParams));
+        return json({ authorizationRequests: items, meta }, env);
+      }
+
+      if (url.pathname === "/materials" && request.method === "GET") {
+        const { items, meta } = await listMaterials(env, listOptions(url.searchParams));
+        return json({ materials: items, meta }, env);
+      }
+
+      if (url.pathname === "/products" && request.method === "GET") {
+        const { items, meta } = await listProducts(env, listOptions(url.searchParams));
+        return json({ products: items, meta }, env);
+      }
+
+      if (url.pathname === "/publish-records" && request.method === "GET") {
+        const { items, meta } = await listPublishRecords(env, listOptions(url.searchParams));
+        return json({ publishRecords: items, meta }, env);
+      }
+
+      if (url.pathname === "/settlements" && request.method === "GET") {
+        const { items, meta } = await listSettlements(env, listOptions(url.searchParams));
+        return json({ settlements: items, meta }, env);
+      }
+
+      if (url.pathname === "/risk-records" && request.method === "GET") {
+        const { items, meta } = await listRiskRecords(env, listOptions(url.searchParams));
+        return json({ riskRecords: items, meta }, env);
+      }
+
       if (url.pathname === "/state/reset" && request.method === "POST") {
         await resetState(env);
         return json(await listState(env), env);
       }
 
       if (url.pathname === "/authorization-requests" && request.method === "POST") {
-        await createAuthorizationRequest(env, await readBody<AuthorizationRequestInput>(request));
+        await createAuthorizationRequest(env, await readJson(request, authorizationRequestSchema));
+        return json(await listState(env), env, { status: 201 });
+      }
+
+      if (url.pathname === "/recordings/direct-upload/init" && request.method === "POST") {
+        const upload = await createDirectUpload(env, await readJson(request, directUploadInitSchema));
+        return json({ upload }, env, { status: 201 });
+      }
+
+      if (url.pathname === "/recordings/direct-upload/complete" && request.method === "POST") {
+        const upload = await completeDirectUpload(env, await readJson(request, directUploadCompleteSchema));
+        ctx.waitUntil(queueClipTask(env, upload));
         return json(await listState(env), env, { status: 201 });
       }
 
       if (url.pathname === "/recordings/upload" && request.method === "POST") {
-        await uploadRecording(env, request);
+        const upload = await uploadRecording(env, request);
+        ctx.waitUntil(queueClipTask(env, upload));
         return json(await listState(env), env, { status: 201 });
       }
 
       const authorizationMatch = url.pathname.match(/^\/authorization-requests\/([^/]+)$/);
       if (authorizationMatch && request.method === "PATCH") {
-        const body = await readBody<{ status: AuthorizationStatus }>(request);
+        const body = await readJson(request, statusSchemas.authorization);
         await patchRows(env, "authorization_requests", `id=eq.${authorizationMatch[1]}`, { status: body.status });
         return json(await listState(env), env);
       }
 
       if (url.pathname === "/materials" && request.method === "POST") {
-        await createMaterial(env, await readBody<MaterialInput>(request));
+        await createMaterial(env, await readJson(request, materialSchema));
         return json(await listState(env), env, { status: 201 });
+      }
+
+      if (url.pathname === "/products" && request.method === "POST") {
+        await createProduct(env, await readJson(request, productSchema));
+        return json(await listState(env), env, { status: 201 });
+      }
+
+      if (url.pathname === "/risk-records" && request.method === "POST") {
+        await createRiskRecord(env, await readJson(request, riskRecordSchema));
+        return json(await listState(env), env, { status: 201 });
+      }
+
+      const riskMatch = url.pathname.match(/^\/risk-records\/([^/]+)$/);
+      if (riskMatch && request.method === "PATCH") {
+        const body = await readJson(request, statusSchemas.risk);
+        await patchRows(env, "violation_leads", `id=eq.${riskMatch[1]}`, { status: body.status });
+        return json(await listState(env), env);
+      }
+
+      const productMatch = url.pathname.match(/^\/products\/([^/]+)$/);
+      if (productMatch && request.method === "PATCH") {
+        const body = await readJson(request, statusSchemas.product);
+        await patchRows(env, "products", `id=eq.${productMatch[1]}`, { is_active: body.isActive });
+        return json(await listState(env), env);
       }
 
       const materialMatch = url.pathname.match(/^\/materials\/([^/]+)$/);
       if (materialMatch && request.method === "PATCH") {
-        const body = await readBody<{ status: MaterialStatus }>(request);
+        const body = await readJson(request, statusSchemas.material);
         await patchRows(env, "clip_assets", `id=eq.${materialMatch[1]}`, { status: body.status });
+        return json(await listState(env), env);
+      }
+
+      const materialProductMatch = url.pathname.match(/^\/materials\/([^/]+)\/product$/);
+      if (materialProductMatch && request.method === "POST") {
+        const body = await readJson(request, materialProductSchema);
+        await bindProductToMaterial(env, materialProductMatch[1], body.productId);
         return json(await listState(env), env);
       }
 
       const claimMatch = url.pathname.match(/^\/materials\/([^/]+)\/claim$/);
       if (claimMatch && request.method === "POST") {
-        const body = await readBody<{ distributorName?: string }>(request);
+        const body = await readJson(request, claimSchema);
         await claimMaterial(env, claimMatch[1], body.distributorName);
         return json(await listState(env), env, { status: 201 });
       }
 
       const submitPublishMatch = url.pathname.match(/^\/publish-records\/([^/]+)\/submit$/);
       if (submitPublishMatch && request.method === "POST") {
+        const body = await readJson(request, submitPublishSchema);
         await patchRows(env, "publish_records", `id=eq.${submitPublishMatch[1]}`, {
           status: "submitted",
           submitted_at: new Date().toISOString(),
-          publish_url: "https://example.com/published-work"
+          publish_url: body.publishUrl || "https://example.com/published-work"
         });
         return json(await listState(env), env);
       }
 
       const performanceMatch = url.pathname.match(/^\/publish-records\/([^/]+)\/performance$/);
       if (performanceMatch && request.method === "POST") {
-        const body = await readBody<{ gmv: number; commission: number }>(request);
+        const body = await readJson(request, performanceSchema);
         await importPerformance(env, performanceMatch[1], body.gmv, body.commission);
         return json(await listState(env), env);
       }
 
       const publishMatch = url.pathname.match(/^\/publish-records\/([^/]+)$/);
       if (publishMatch && request.method === "PATCH") {
-        const body = await readBody<{ status: PublishStatus }>(request);
+        const body = await readJson(request, statusSchemas.publish);
         await patchRows(env, "publish_records", `id=eq.${publishMatch[1]}`, {
           status: body.status,
           verified_at: body.status === "verified" ? new Date().toISOString() : null
@@ -702,7 +1505,7 @@ const worker = {
 
       const settlementMatch = url.pathname.match(/^\/settlements\/([^/]+)$/);
       if (settlementMatch && request.method === "PATCH") {
-        const body = await readBody<{ status: SettlementStatus }>(request);
+        const body = await readJson(request, statusSchemas.settlement);
         await patchRows(env, "settlement_orders", `id=eq.${settlementMatch[1]}`, { status: body.status });
         return json(await listState(env), env);
       }
@@ -718,19 +1521,14 @@ const worker = {
         return json({ ok: true, queued: true }, env, { status: 202 });
       }
 
-      return json({ error: "Not found" }, env, { status: 404 });
+      return errorJson(new ApiError("not_found", "Not found", 404), env);
     } catch (error) {
-      return json(
-        {
-          error: error instanceof Error ? error.message : "Unknown error"
-        },
-        env,
-        { status: 500 }
-      );
+      logError(request, error);
+      return errorJson(error, env);
     }
   },
 
-  async scheduled(_event: ScheduledEvent, env: Env): Promise<void> {
+  async scheduled(_event: ScheduledEvent, env: WorkerEnv): Promise<void> {
     await env.CLIP_TASK_QUEUE.send({
       type: "cron.scan",
       createdAt: new Date().toISOString()

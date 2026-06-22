@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { Check, Pause, Plus, Search, X } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
@@ -7,8 +8,34 @@ import { StatusBadge } from "@/components/Badge";
 import { useClipPartnerStore } from "@/lib/local-store";
 
 export default function AuthorizationsPage() {
-  const { state, addAuthorizationRequest, updateAuthorizationStatus } = useClipPartnerStore();
-  const authorizationRequests = state.authorizationRequests;
+  const { state, addAuthorizationRequest, updateAuthorizationStatus, refreshRemoteList } = useClipPartnerStore();
+  const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [ipFilter, setIpFilter] = useState("all");
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void refreshRemoteList("authorizationRequests", {
+        status: statusFilter,
+        limit: 50
+      });
+    }, 250);
+
+    return () => window.clearTimeout(timer);
+  }, [refreshRemoteList, statusFilter]);
+
+  const authorizationRequests = state.authorizationRequests.filter((request) => {
+    const keyword = query.trim().toLowerCase();
+    const matchesKeyword =
+      !keyword ||
+      [request.distributorName, request.phone, request.socialAccount, request.ipName, request.reason]
+        .join(" ")
+        .toLowerCase()
+        .includes(keyword);
+    const matchesStatus = statusFilter === "all" || request.status === statusFilter;
+    const matchesIp = ipFilter === "all" || request.ipName === ipFilter;
+    return matchesKeyword && matchesStatus && matchesIp;
+  });
 
   return (
     <AppShell active="/admin/authorizations">
@@ -35,20 +62,35 @@ export default function AuthorizationsPage() {
       />
 
       <div className="filter-bar">
-        <div className="input" style={{ minWidth: 260 }}>
-          <Search size={16} aria-hidden /> 搜索分发者 / 社媒账号
-        </div>
-        <select className="select" defaultValue="all" aria-label="审核状态">
+        <label className="input search-control" style={{ minWidth: 260 }}>
+          <Search size={16} aria-hidden />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="搜索分发者 / 社媒账号"
+          />
+        </label>
+        <select
+          className="select"
+          value={statusFilter}
+          onChange={(event) => setStatusFilter(event.target.value)}
+          aria-label="审核状态"
+        >
           <option value="all">全部状态</option>
           <option value="pending">待审核</option>
           <option value="approved">已通过</option>
           <option value="paused">已暂停</option>
         </select>
-        <select className="select" defaultValue="all" aria-label="IP">
+        <select
+          className="select"
+          value={ipFilter}
+          onChange={(event) => setIpFilter(event.target.value)}
+          aria-label="IP"
+        >
           <option value="all">全部 IP</option>
-          <option value="home">老许家居</option>
-          <option value="fashion">晴姐穿搭</option>
-          <option value="digital">林哥数码</option>
+          <option value="老许家居">老许家居</option>
+          <option value="晴姐穿搭">晴姐穿搭</option>
+          <option value="林哥数码">林哥数码</option>
         </select>
       </div>
 

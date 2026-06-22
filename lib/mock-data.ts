@@ -1,4 +1,4 @@
-import type { AuthorizationRequest, Material, Metric, PublishRecord, Settlement } from "./domain";
+import type { AuthorizationRequest, Material, Metric, Product, PublishRecord, RiskRecord, Settlement } from "./domain";
 
 export const dashboardMetrics: Metric[] = [
   {
@@ -105,6 +105,39 @@ export const materials: Material[] = [
   }
 ];
 
+export const products: Product[] = [
+  {
+    id: "PROD-001",
+    name: "冰感通勤套装",
+    platform: "抖音",
+    affiliateUrl: "https://example.com/fashion-set",
+    commissionRate: 15,
+    isActive: true,
+    materialCount: 1,
+    createdAt: "2026-06-22"
+  },
+  {
+    id: "PROD-002",
+    name: "免打孔厨房置物架",
+    platform: "视频号",
+    affiliateUrl: "https://example.com/kitchen-shelf",
+    commissionRate: 18,
+    isActive: true,
+    materialCount: 1,
+    createdAt: "2026-06-22"
+  },
+  {
+    id: "PROD-003",
+    name: "领夹无线麦克风",
+    platform: "抖音",
+    affiliateUrl: "https://example.com/wireless-mic",
+    commissionRate: 12,
+    isActive: false,
+    materialCount: 1,
+    createdAt: "2026-06-22"
+  }
+];
+
 export const publishRecords: PublishRecord[] = [
   {
     id: "PUB-001",
@@ -165,6 +198,36 @@ export const settlements: Settlement[] = [
     verifiedPosts: 4,
     payableCommission: 0,
     status: "blocked"
+  }
+];
+
+export const riskRecords: RiskRecord[] = [
+  {
+    id: "RISK-001",
+    platform: "抖音",
+    account: "好物搬运站",
+    issue: "疑似未授权搬运晴姐穿搭素材",
+    workUrl: "https://example.com/douyin/work/001",
+    status: "open",
+    createdAt: "2026-06-22 15:20"
+  },
+  {
+    id: "RISK-002",
+    platform: "视频号",
+    account: "家居精选合集",
+    issue: "作品挂载非平台指定商品链接",
+    workUrl: "https://example.com/channels/work/002",
+    status: "warning",
+    createdAt: "2026-06-22 16:05"
+  },
+  {
+    id: "RISK-003",
+    platform: "抖音",
+    account: "凯哥剪货",
+    issue: "授权账号发布后删除作品，结算冻结",
+    workUrl: "https://example.com/douyin/work/003",
+    status: "blocked",
+    createdAt: "2026-06-21 20:16"
   }
 ];
 

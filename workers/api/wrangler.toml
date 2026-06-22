@@ -1,11 +1,17 @@
 name = "clip-partner-api"
 main = "src/index.ts"
 compatibility_date = "2026-06-22"
+compatibility_flags = ["nodejs_compat"]
+
+[observability]
+enabled = true
+head_sampling_rate = 1
 
 [vars]
 APP_ENV = "development"
 FRONTEND_ORIGIN = "https://clip-partner.vercel.app"
 NEXT_PUBLIC_SUPABASE_URL = "https://qhlesjopsqzcefsyjvgk.supabase.co"
+R2_BUCKET_NAME = "clip-partner-assets"
 
 [[r2_buckets]]
 binding = "CLIP_PARTNER_BUCKET"
@@ -20,6 +26,9 @@ crons = ["*/30 * * * *"]
 
 # Production values should be set with:
 # wrangler secret put SUPABASE_SERVICE_ROLE_KEY
+# wrangler secret put R2_ACCOUNT_ID
+# wrangler secret put R2_ACCESS_KEY_ID
+# wrangler secret put R2_SECRET_ACCESS_KEY
 # wrangler secret put WECHAT_OAUTH_APP_SECRET
 # wrangler secret put FFMPEG_WORKER_TOKEN
 # wrangler secret put DOUYIN_APP_SECRET

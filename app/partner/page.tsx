@@ -1,13 +1,43 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { ClipboardCheck, Copy, Download, LogOut, Plus, Search } from "lucide-react";
 import { money } from "@/lib/domain";
 import { useClipPartnerStore } from "@/lib/local-store";
 
 export default function PartnerPage() {
-  const { state, addAuthorizationRequest, claimMaterial, submitPublishLink } = useClipPartnerStore();
-  const publishedMaterials = state.materials.filter((material) => material.status === "published");
+  const { state, addAuthorizationRequest, claimMaterial, submitPublishLink, syncStatus, refreshRemoteList } = useClipPartnerStore();
+  const [query, setQuery] = useState("");
+  const [ipFilter, setIpFilter] = useState("all");
+  const [publishLinks, setPublishLinks] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void refreshRemoteList("materials", {
+        q: query,
+        status: "published",
+        limit: 50
+      });
+      void refreshRemoteList("publishRecords", { limit: 50 });
+      void refreshRemoteList("settlements", { limit: 50 });
+    }, 250);
+
+    return () => window.clearTimeout(timer);
+  }, [query, refreshRemoteList]);
+
+  const publishedMaterials = state.materials.filter((material) => {
+    const keyword = query.trim().toLowerCase();
+    const matchesKeyword =
+      !keyword ||
+      [material.title, material.ipName, material.productName, ...material.tags]
+        .join(" ")
+        .toLowerCase()
+        .includes(keyword);
+    const matchesIp = ipFilter === "all" || material.ipName === ipFilter;
+    return material.status === "published" && matchesKeyword && matchesIp;
+  });
+
   const myRecords = state.publishRecords.filter((record) => record.distributorName === "周婧");
   const payable = state.settlements
     .filter((settlement) => settlement.distributorName === "周婧" && settlement.status !== "blocked")
@@ -25,6 +55,9 @@ export default function PartnerPage() {
             <Link className="button" href="/">
               返回后台预览
             </Link>
+            <span className={syncStatus === "remote" ? "badge success" : syncStatus === "error" ? "badge danger" : "badge"}>
+              {syncStatus === "remote" ? "已连接线上数据" : syncStatus === "syncing" ? "同步中" : syncStatus === "error" ? "同步失败" : "本地模式"}
+            </span>
             <button className="button" aria-label="退出">
               <LogOut size={16} aria-hidden />
             </button>
@@ -38,7 +71,7 @@ export default function PartnerPage() {
             <p className="page-kicker">分发者素材中心</p>
             <h1 className="page-title">领取授权素材并回填发布链接</h1>
             <p className="page-subtitle">
-              这里只展示已授权 IP 的可领取素材。领取时需要选择推广商品和发布账号，下载、发布和结算都会保留记录。
+              这里只展示已授权 IP 的可领取素材。领取时会记录素材、商品、发布平台和账号，回填作品链接后进入后台核验和结算流程。
             </p>
           </div>
           <div className="content-card" style={{ minWidth: 280 }}>
@@ -49,13 +82,14 @@ export default function PartnerPage() {
         </div>
 
         <div className="filter-bar">
-          <div className="input" style={{ minWidth: 280 }}>
-            <Search size={16} aria-hidden /> 搜索素材 / 商品
-          </div>
-          <select className="select" defaultValue="all" aria-label="IP 筛选">
+          <label className="input search-control" style={{ minWidth: 280 }}>
+            <Search size={16} aria-hidden />
+            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索素材 / 商品" />
+          </label>
+          <select className="select" value={ipFilter} onChange={(event) => setIpFilter(event.target.value)} aria-label="IP 筛选">
             <option value="all">全部授权 IP</option>
-            <option value="fashion">晴姐穿搭</option>
-            <option value="home">老许家居</option>
+            <option value="晴姐穿搭">晴姐穿搭</option>
+            <option value="老许家居">老许家居</option>
           </select>
           <button
             className="button"
@@ -93,7 +127,10 @@ export default function PartnerPage() {
                 </div>
                 <div className="item-meta">指定商品：{material.productName}</div>
                 <div className="material-actions">
-                  <button className="button">
+                  <button
+                    className="button"
+                    onClick={() => void navigator.clipboard?.writeText(`推荐发布：${material.title}`)}
+                  >
                     <Copy size={16} aria-hidden /> 文案
                   </button>
                   <button className="button primary" onClick={() => claimMaterial(material.id, "周婧")}>
@@ -108,7 +145,7 @@ export default function PartnerPage() {
         <section className="table-card" style={{ marginTop: 18 }}>
           <div className="table-header">
             <h2 className="table-title">我的发布记录</h2>
-            <span className="badge info">发布后回填链接，后台才可核验结算</span>
+            <span className="badge info">发布后回填作品链接，后台才可核验结算</span>
           </div>
           <table className="data-table">
             <thead>
@@ -117,6 +154,7 @@ export default function PartnerPage() {
                 <th>商品</th>
                 <th>平台</th>
                 <th>状态</th>
+                <th>发布链接</th>
                 <th>操作</th>
               </tr>
             </thead>
@@ -128,8 +166,25 @@ export default function PartnerPage() {
                   <td>{record.platform}</td>
                   <td>{record.status}</td>
                   <td>
-                    <button className="button" onClick={() => submitPublishLink(record.id)}>
-                      <ClipboardCheck size={16} aria-hidden /> 回填发布链接
+                    <input
+                      className="input"
+                      style={{ minWidth: 260 }}
+                      value={publishLinks[record.id] ?? ""}
+                      onChange={(event) =>
+                        setPublishLinks((current) => ({
+                          ...current,
+                          [record.id]: event.target.value
+                        }))
+                      }
+                      placeholder="粘贴抖音 / 视频号作品链接"
+                    />
+                  </td>
+                  <td>
+                    <button
+                      className="button"
+                      onClick={() => submitPublishLink(record.id, publishLinks[record.id] || "https://example.com/published-work")}
+                    >
+                      <ClipboardCheck size={16} aria-hidden /> 回填
                     </button>
                   </td>
                 </tr>

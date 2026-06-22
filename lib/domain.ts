@@ -16,11 +16,24 @@ export type PublishStatus =
   | "invalid"
   | "settled";
 
+export type RiskStatus = "pending" | "open" | "warning" | "blocked" | "resolved";
+
 export type Metric = {
   label: string;
   value: string;
   note: string;
   tone?: "success" | "warning" | "danger" | "info";
+};
+
+export type Product = {
+  id: string;
+  name: string;
+  platform: "抖音" | "视频号";
+  affiliateUrl: string;
+  commissionRate: number;
+  isActive: boolean;
+  materialCount: number;
+  createdAt: string;
 };
 
 export type AuthorizationRequest = {
@@ -70,8 +83,18 @@ export type Settlement = {
   status: "pending" | "confirmed" | "paid" | "blocked";
 };
 
+export type RiskRecord = {
+  id: string;
+  platform: "抖音" | "视频号";
+  account: string;
+  issue: string;
+  workUrl: string;
+  status: RiskStatus;
+  createdAt: string;
+};
+
 export const statusLabels: Record<
-  AuthorizationStatus | MaterialStatus | PublishStatus | Settlement["status"],
+  AuthorizationStatus | MaterialStatus | PublishStatus | Settlement["status"] | RiskStatus,
   string
 > = {
   pending: "待审核",
@@ -93,17 +116,20 @@ export const statusLabels: Record<
   settled: "已结算",
   confirmed: "已确认",
   paid: "已打款",
-  blocked: "已冻结"
+  blocked: "已冻结",
+  open: "待处理",
+  warning: "已警告",
+  resolved: "已关闭"
 };
 
 export function badgeTone(
-  status: AuthorizationStatus | MaterialStatus | PublishStatus | Settlement["status"]
+  status: AuthorizationStatus | MaterialStatus | PublishStatus | Settlement["status"] | RiskStatus
 ) {
-  if (["approved", "published", "verified", "paid", "settled"].includes(status)) {
+  if (["approved", "published", "verified", "paid", "settled", "resolved"].includes(status)) {
     return "success";
   }
 
-  if (["pending", "processing", "ready", "submitted", "confirmed"].includes(status)) {
+  if (["pending", "processing", "ready", "submitted", "confirmed", "open", "warning"].includes(status)) {
     return "warning";
   }
 

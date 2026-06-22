@@ -1,7 +1,7 @@
 "use client";
 
-import { useRef } from "react";
-import { Archive, FileUp, Plus, Scissors, Search, UploadCloud } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Archive, FileUp, Link2, Plus, Scissors, Search, UploadCloud } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
 import { StatusBadge } from "@/components/Badge";
@@ -9,8 +9,35 @@ import { useClipPartnerStore } from "@/lib/local-store";
 
 export default function MaterialsPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const { state, addMaterial, uploadRecording, updateMaterialStatus, syncStatus } = useClipPartnerStore();
-  const materials = state.materials;
+  const { state, addMaterial, uploadRecording, updateMaterialStatus, bindMaterialProduct, syncStatus, refreshRemoteList } =
+    useClipPartnerStore();
+  const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void refreshRemoteList("materials", {
+        q: query,
+        status: statusFilter,
+        limit: 50
+      });
+    }, 250);
+
+    return () => window.clearTimeout(timer);
+  }, [query, refreshRemoteList, statusFilter]);
+
+  const materials = state.materials.filter((material) => {
+    const keyword = query.trim().toLowerCase();
+    const matchesKeyword =
+      !keyword ||
+      [material.title, material.ipName, material.sourcePlatform, material.productName, ...material.tags]
+        .join(" ")
+        .toLowerCase()
+        .includes(keyword);
+    const matchesStatus = statusFilter === "all" || material.status === statusFilter;
+    return matchesKeyword && matchesStatus;
+  });
+  const activeProducts = state.products.filter((product) => product.isActive);
 
   return (
     <AppShell active="/admin/materials">
@@ -58,10 +85,20 @@ export default function MaterialsPage() {
       />
 
       <div className="filter-bar">
-        <div className="input" style={{ minWidth: 280 }}>
-          <Search size={16} aria-hidden /> 搜索素材标题 / 商品
-        </div>
-        <select className="select" defaultValue="all" aria-label="素材状态">
+        <label className="input search-control" style={{ minWidth: 280 }}>
+          <Search size={16} aria-hidden />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="搜索素材标题 / 商品"
+          />
+        </label>
+        <select
+          className="select"
+          value={statusFilter}
+          onChange={(event) => setStatusFilter(event.target.value)}
+          aria-label="素材状态"
+        >
           <option value="all">全部状态</option>
           <option value="published">可领取</option>
           <option value="ready">待完善</option>
@@ -131,6 +168,17 @@ export default function MaterialsPage() {
                 </td>
                 <td>
                   <div className="toolbar">
+                    <button
+                      className="button"
+                      title="绑定启用商品"
+                      aria-label="绑定启用商品"
+                      onClick={() => {
+                        const product = activeProducts[0];
+                        if (product) bindMaterialProduct(material.id, product.id);
+                      }}
+                    >
+                      <Link2 size={16} aria-hidden />
+                    </button>
                     <button
                       className="button"
                       title="设为可领取"
