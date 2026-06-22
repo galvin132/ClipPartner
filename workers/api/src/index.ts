@@ -3,8 +3,10 @@
 import { AwsClient } from "aws4fetch";
 import { z } from "zod";
 
-type PlatformLabel = "鎶栭煶" | "瑙嗛鍙?;
 type PlatformValue = "douyin" | "wechat_channels";
+const DOUYIN_LABEL = "\u6296\u97f3";
+const WECHAT_CHANNELS_LABEL = "\u89c6\u9891\u53f7";
+type PlatformLabel = typeof DOUYIN_LABEL | typeof WECHAT_CHANNELS_LABEL;
 
 type AuthorizationStatus = "pending" | "approved" | "rejected" | "paused" | "banned" | "expired";
 type MaterialStatus = "draft" | "processing" | "ready" | "published" | "archived";
@@ -123,7 +125,12 @@ class ApiError extends Error {
   }
 }
 
-const platformSchema = z.union([z.literal("douyin"), z.literal("wechat_channels"), z.literal("鎶栭煶"), z.literal("瑙嗛鍙?)]);
+const platformSchema = z.union([
+  z.literal("douyin"),
+  z.literal("wechat_channels"),
+  z.literal(DOUYIN_LABEL),
+  z.literal(WECHAT_CHANNELS_LABEL)
+]);
 const nonEmptyString = z.string().trim().min(1).max(500);
 const uuidSchema = z.string().uuid();
 
@@ -199,23 +206,18 @@ const materialProductSchema = z.object({
   productId: uuidSchema
 });
 
-const platformToValue: Record<PlatformLabel, PlatformValue> = {
-  鎶栭煶: "douyin",
-  瑙嗛鍙? "wechat_channels"
-};
-
 const platformToLabel: Record<PlatformValue, PlatformLabel> = {
-  douyin: "鎶栭煶",
-  wechat_channels: "瑙嗛鍙?
+  douyin: DOUYIN_LABEL,
+  wechat_channels: WECHAT_CHANNELS_LABEL
 };
 
 function toPlatformValue(value: string | undefined): PlatformValue {
-  if (value === "wechat_channels" || value === "瑙嗛鍙?) return "wechat_channels";
+  if (value === "wechat_channels" || value === WECHAT_CHANNELS_LABEL) return "wechat_channels";
   return "douyin";
 }
 
 function toPlatformLabel(value: string | undefined): PlatformLabel {
-  return toPlatformValue(value) === "wechat_channels" ? "瑙嗛鍙? : "鎶栭煶";
+  return toPlatformValue(value) === "wechat_channels" ? WECHAT_CHANNELS_LABEL : DOUYIN_LABEL;
 }
 
 function corsHeaders(env: WorkerEnv) {
@@ -379,9 +381,9 @@ function listOptions(params: URLSearchParams): ListOptions {
   const status = params.get("status")?.trim().slice(0, 40) || undefined;
   const platformParam = params.get("platform")?.trim();
   const platform =
-    platformParam === "douyin" || platformParam === "鎶栭煶"
+    platformParam === "douyin" || platformParam === DOUYIN_LABEL
       ? "douyin"
-      : platformParam === "wechat_channels" || platformParam === "瑙嗛鍙?
+      : platformParam === "wechat_channels" || platformParam === WECHAT_CHANNELS_LABEL
         ? "wechat_channels"
         : undefined;
 
@@ -417,7 +419,7 @@ function buildListQuery(select: string, order: string, options: ListOptions, fil
   return [select, order, rangeQuery(options), ...filters].filter(Boolean).join("&");
 }
 
-async function findOrCreateDistributor(env: WorkerEnv, displayName: string, phone = "寰呯粦瀹?) {
+async function findOrCreateDistributor(env: WorkerEnv, displayName: string, phone = "Pending binding") {
   const existing = await selectRows<{ id: string }>(
     env,
     "distributor_profiles",
@@ -440,7 +442,7 @@ async function findOrCreateIp(env: WorkerEnv, name: string, platform: string) {
   return insertRow<{ id: string }>(env, "ip_accounts", {
     name,
     platform: toPlatformValue(platform),
-    description: `${name} 鐩存挱鍒囩墖 IP`,
+    description: `${name} 闁烩晛鐡ㄩ幐閬嶅礆閸モ晛顣?IP`,
     default_share_rate: 50
   });
 }
@@ -508,7 +510,7 @@ async function createMaterial(env: WorkerEnv, input: MaterialInput) {
     ip_account_id: ip.id,
     title: input.title,
     status: "processing",
-    tags: ["寰呮爣娉?],
+    tags: ["Pending tag"],
     start_second: 0,
     end_second: 0
   });
@@ -541,9 +543,9 @@ async function createRecordingAsset(env: WorkerEnv, meta: RecordingUploadMeta, k
   const clip = await insertRow<{ id: string }>(env, "clip_assets", {
     live_recording_id: recording.id,
     ip_account_id: ip.id,
-    title: `${meta.title} - 寰呭垏鐗嘸,
+    title: `${meta.title} - pending clip`,
     status: "processing",
-    tags: ["褰曞睆涓婁紶", "寰呭垏鐗?],
+    tags: ["recording-upload", "pending-clip"],
     start_second: 0,
     end_second: 0
   });
@@ -564,9 +566,9 @@ async function uploadRecording(env: WorkerEnv, request: Request): Promise<Record
   }
 
   const meta: RecordingUploadMeta = {
-    title: String(form.get("title") || file.name || "涓婁紶褰曞睆寰呭垏鐗?),
-    ipName: String(form.get("ipName") || "鏅村绌挎惌"),
-    sourcePlatform: String(form.get("sourcePlatform") || "瑙嗛鍙?)
+    title: String(form.get("title") || file.name || "Uploaded recording pending clip"),
+    ipName: String(form.get("ipName") || "Demo IP"),
+    sourcePlatform: String(form.get("sourcePlatform") || WECHAT_CHANNELS_LABEL)
   };
   const parsed = directUploadInitSchema
     .pick({ title: true, ipName: true, sourcePlatform: true })
@@ -719,7 +721,7 @@ async function bindProductToMaterial(env: WorkerEnv, clipAssetId: string, produc
   });
 }
 
-async function claimMaterial(env: WorkerEnv, clipAssetId: string, distributorName = "鍛ㄥ┃") {
+async function claimMaterial(env: WorkerEnv, clipAssetId: string, distributorName = "Demo Distributor") {
   const clipRows = await selectRows<{
     id: string;
     title: string;
@@ -739,7 +741,7 @@ async function claimMaterial(env: WorkerEnv, clipAssetId: string, distributorNam
   if (!productId) throw new Error("Clip asset has no product");
 
   const distributor = await findOrCreateDistributor(env, distributorName, "186****7108");
-  const social = await findOrCreateSocialAccount(env, distributor.id, "灏忓懆濂界墿灞€", platform);
+  const social = await findOrCreateSocialAccount(env, distributor.id, "Demo account", platform);
   const claim = await insertRow<{ id: string }>(env, "clip_claims", {
     distributor_id: distributor.id,
     clip_asset_id: clip.id,
@@ -761,7 +763,7 @@ async function claimMaterial(env: WorkerEnv, clipAssetId: string, distributorNam
     clip_asset_id: clip.id,
     product_id: productId,
     platform: toPlatformValue(platform),
-    publish_url: "寰呭洖濉?,
+    publish_url: "pending",
     status: "downloaded"
   });
 }
@@ -794,7 +796,7 @@ async function generateSettlement(env: WorkerEnv) {
     return sum + Number(latest?.commission_amount ?? 0) * 0.5;
   }, 0);
 
-  const distributor = records[0]?.distributor_id ?? (await findOrCreateDistributor(env, "鏈湀姹囨€?)).id;
+  const distributor = records[0]?.distributor_id ?? (await findOrCreateDistributor(env, "Monthly settlement")).id;
   await insertRow(env, "settlement_orders", {
     distributor_id: distributor,
     period: new Date().toISOString().slice(0, 7),
@@ -863,11 +865,11 @@ async function listAuthorizationRequests(env: WorkerEnv, options = listOptions(n
 
   const authorizationRequests = rows.map((row) => ({
     id: row.id,
-    distributorName: row.distributor_profiles?.display_name ?? "鏈煡鍒嗗彂鑰?,
-    phone: row.distributor_profiles?.phone ?? "寰呯粦瀹?,
-    socialAccount: row.social_accounts?.account_name ?? "寰呯粦瀹氳处鍙?,
+    distributorName: row.distributor_profiles?.display_name ?? "Unknown distributor",
+    phone: row.distributor_profiles?.phone ?? "Pending binding",
+    socialAccount: row.social_accounts?.account_name ?? "Pending account",
     platform: platformToLabel[row.social_accounts?.platform ?? "douyin"],
-    ipName: row.ip_accounts?.name ?? "鏈煡 IP",
+    ipName: row.ip_accounts?.name ?? "Unknown IP",
     status: row.status,
     appliedAt: new Date(row.created_at).toLocaleString("zh-CN", { hour12: false }),
     reason: row.application_note ?? ""
@@ -908,12 +910,12 @@ async function listMaterials(env: WorkerEnv, options = listOptions(new URLSearch
     const materials = rows.map((row) => ({
       id: row.id,
       title: row.title,
-      ipName: row.ip_name ?? "鏈煡 IP",
+      ipName: row.ip_name ?? "Unknown IP",
       sourcePlatform: platformToLabel[row.source_platform ?? "douyin"],
       liveDate: row.live_date,
-      duration: row.duration_seconds && row.duration_seconds > 0 ? `${row.duration_seconds}s` : "寰呭垏鐗?,
-      tags: row.tags?.length ? row.tags : ["寰呮爣娉?],
-      productName: row.product_name ?? "寰呯粦瀹氬晢鍝?,
+      duration: row.duration_seconds && row.duration_seconds > 0 ? `${row.duration_seconds}s` : "Pending clip",
+      tags: row.tags?.length ? row.tags : ["Pending tag"],
+      productName: row.product_name ?? "Pending product",
       status: row.status,
       claims: Number(row.claims ?? 0),
       downloads: Number(row.downloads ?? 0)
@@ -954,15 +956,15 @@ async function listMaterials(env: WorkerEnv, options = listOptions(new URLSearch
   const materials = clips.map((clip) => ({
     id: clip.id,
     title: clip.title,
-    ipName: clip.ip_accounts?.name ?? "鏈煡 IP",
+    ipName: clip.ip_accounts?.name ?? "Unknown IP",
     sourcePlatform: platformToLabel[clip.ip_accounts?.platform ?? "douyin"],
     liveDate: clip.created_at.slice(0, 10),
     duration:
       clip.end_second && clip.start_second && clip.end_second > clip.start_second
         ? `${clip.end_second - clip.start_second}s`
-        : "寰呭垏鐗?,
-    tags: clip.tags?.length ? clip.tags : ["寰呮爣娉?],
-    productName: clip.clip_products[0]?.products?.name ?? "寰呯粦瀹氬晢鍝?,
+        : "Pending clip",
+    tags: clip.tags?.length ? clip.tags : ["Pending tag"],
+    productName: clip.clip_products[0]?.products?.name ?? "Pending product",
     status: clip.status,
     claims: claimsByClip.get(clip.id) ?? 0,
     downloads: downloadsByClip.get(clip.id) ?? 0
@@ -1076,9 +1078,9 @@ async function listPublishRecords(env: WorkerEnv, options = listOptions(new URLS
 
     const publishRecords = rows.map((row) => ({
       id: row.id,
-      distributorName: row.distributor_name ?? "鏈煡鍒嗗彂鑰?,
-      materialTitle: row.material_title ?? "鏈煡绱犳潗",
-      productName: row.product_name ?? "鏈煡鍟嗗搧",
+      distributorName: row.distributor_name ?? "Unknown distributor",
+      materialTitle: row.material_title ?? "Unknown material",
+      productName: row.product_name ?? "Unknown product",
       platform: platformToLabel[row.platform],
       status: row.status,
       submittedAt: new Date(row.submitted_at).toLocaleString("zh-CN", { hour12: false }),
@@ -1117,9 +1119,9 @@ async function listPublishRecords(env: WorkerEnv, options = listOptions(new URLS
     const latest = row.performance_snapshots.at(-1);
     return {
       id: row.id,
-      distributorName: row.distributor_profiles?.display_name ?? "鏈煡鍒嗗彂鑰?,
-      materialTitle: row.clip_assets?.title ?? "鏈煡绱犳潗",
-      productName: row.products?.name ?? "鏈煡鍟嗗搧",
+      distributorName: row.distributor_profiles?.display_name ?? "Unknown distributor",
+      materialTitle: row.clip_assets?.title ?? "Unknown material",
+      productName: row.products?.name ?? "Unknown product",
       platform: platformToLabel[row.platform],
       status: row.status,
       submittedAt: new Date(row.submitted_at).toLocaleString("zh-CN", { hour12: false }),
@@ -1156,7 +1158,7 @@ async function listSettlements(env: WorkerEnv, options = listOptions(new URLSear
 
     const settlements = rows.map((row) => ({
       id: row.id,
-      distributorName: row.distributor_name ?? "鏈湀姹囨€?,
+      distributorName: row.distributor_name ?? "Monthly settlement",
       period: row.period,
       verifiedPosts: Number(row.verified_posts ?? 0),
       payableCommission: Number(row.payable_commission ?? 0),
@@ -1186,7 +1188,7 @@ async function listSettlements(env: WorkerEnv, options = listOptions(new URLSear
 
   const settlements = rows.map((row) => ({
     id: row.id,
-    distributorName: row.distributor_profiles?.display_name ?? "鏈湀姹囨€?,
+    distributorName: row.distributor_profiles?.display_name ?? "Monthly settlement",
     period: row.period,
     verifiedPosts: 0,
     payableCommission: Number(row.total_amount),
@@ -1223,7 +1225,7 @@ async function listRiskRecords(env: WorkerEnv, options = listOptions(new URLSear
     id: row.id,
     platform: platformToLabel[row.platform],
     account: row.account_name,
-    issue: row.handling_note ?? "寰呰ˉ鍏呰繚瑙勮鏄?,
+    issue: row.handling_note ?? "Pending review",
     workUrl: row.work_url,
     status: row.status,
     createdAt: new Date(row.created_at).toLocaleString("zh-CN", { hour12: false })
@@ -1244,24 +1246,24 @@ async function createRiskRecord(env: WorkerEnv, input: RiskRecordInput) {
 
 async function seedDemoData(env: WorkerEnv) {
   await createAuthorizationRequest(env, {
-    distributorName: "鏉庢櫒",
-    socialAccount: "鏅ㄥ壀绮鹃€?,
-    platform: "鎶栭煶",
-    ipName: "鑰佽瀹跺眳",
-    reason: "宸叉湁瀹跺眳鍨傜被璐﹀彿锛岃鍒掓瘡鏃ュ彂甯?3 鏉″垏鐗囥€?
+    distributorName: "Demo Creator A",
+    socialAccount: "demo_douyin_account",
+    platform: DOUYIN_LABEL,
+    ipName: "Demo Home IP",
+    reason: "Existing home category account; plans to publish 3 clips per day."
   });
   await createAuthorizationRequest(env, {
-    distributorName: "鍛ㄥ┃",
-    socialAccount: "灏忓懆濂界墿灞€",
-    platform: "瑙嗛鍙?,
-    ipName: "鏅村绌挎惌",
-    reason: "瑙嗛鍙风矇涓?1.8 涓囷紝濂宠杞寲绋冲畾銆?
+    distributorName: "Demo Creator B",
+    socialAccount: "demo_channels_account",
+    platform: WECHAT_CHANNELS_LABEL,
+    ipName: "Demo Fashion IP",
+    reason: "Channels account with stable conversion."
   });
   await createMaterial(env, {
-    title: "鏅村璁茶В澶忓閫氬嫟濂楄涓変欢濂?,
-    ipName: "鏅村绌挎惌",
-    sourcePlatform: "鎶栭煶",
-    productName: "鍐版劅閫氬嫟濂楄"
+    title: "Demo product explainer clip",
+    ipName: "Demo Fashion IP",
+    sourcePlatform: DOUYIN_LABEL,
+    productName: "Demo product"
   });
 }
 
