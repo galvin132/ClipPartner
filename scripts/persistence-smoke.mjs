@@ -47,6 +47,10 @@ const names = {
   risk: `${suffix}-Risk`
 };
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function api(path, init = {}) {
   const headers = new Headers(init.headers);
   headers.set("content-type", "application/json");
@@ -54,23 +58,46 @@ async function api(path, init = {}) {
     headers.set("x-clip-role", "admin");
     headers.set("x-clip-user-id", "smoke-admin");
     headers.set("x-clip-display-name", "Smoke Admin");
-  } else if (path.startsWith("/partner/") || path.startsWith("/claims/")) {
+  } else if (path.startsWith("/partner/") || path.startsWith("/claims/") || path.startsWith("/notifications/")) {
     headers.set("x-clip-role", "partner");
     headers.set("x-clip-user-id", "smoke-partner");
     headers.set("x-clip-display-name", names.distributor);
   }
   headers.set("x-clip-auth-provider", "mock");
 
-  const response = await fetch(`${apiBase}${path}`, {
-    ...init,
-    headers
-  });
+  let response;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      response = await fetch(`${apiBase}${path}`, {
+        ...init,
+        headers
+      });
+      if (response.status < 500 && response.status !== 429) break;
+    } catch (error) {
+      if (attempt === 3) throw error;
+    }
+    await sleep(350 * attempt);
+  }
+  if (!response) {
+    throw new Error(`${init.method || "GET"} ${path} -> no response`);
+  }
   const text = await response.text();
   const body = text ? JSON.parse(text) : null;
   if (!response.ok) {
     throw new Error(`${init.method || "GET"} ${path} -> ${response.status}: ${JSON.stringify(body)}`);
   }
   return body;
+}
+
+async function expectApiError(path, init, expectedStatus, expectedCode) {
+  const response = await fetch(`${apiBase}${path}`, init);
+  const text = await response.text();
+  const body = text ? JSON.parse(text) : null;
+  if (response.status !== expectedStatus || body?.error?.code !== expectedCode) {
+    throw new Error(
+      `${init.method || "GET"} ${path} expected ${expectedStatus}/${expectedCode}, got ${response.status}: ${JSON.stringify(body)}`
+    );
+  }
 }
 
 async function supabase(path, init = {}) {
@@ -126,6 +153,20 @@ async function cleanup(notificationId) {
 let notificationId;
 
 try {
+  await expectApiError(
+    "/admin/distributors?limit=1",
+    {
+      headers: {
+        "x-clip-role": "partner",
+        "x-clip-user-id": "smoke-partner",
+        "x-clip-display-name": names.distributor,
+        "x-clip-auth-provider": "mock"
+      }
+    },
+    403,
+    "forbidden"
+  );
+
   await api("/partner/profile", {
     method: "POST",
     body: JSON.stringify({
