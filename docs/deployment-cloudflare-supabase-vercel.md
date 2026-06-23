@@ -33,11 +33,24 @@ Vercel 环境变量建议先配置：
 ```env
 NEXT_PUBLIC_APP_URL=https://clip-partner.vercel.app
 NEXT_PUBLIC_API_BASE_URL=https://clip-partner-api.<your-subdomain>.workers.dev
+NEXT_PUBLIC_RUNTIME_MODE=mock
 NEXT_PUBLIC_SUPABASE_URL=
 NEXT_PUBLIC_SUPABASE_ANON_KEY=
 ```
 
 不要把 `SUPABASE_SERVICE_ROLE_KEY` 放到 `NEXT_PUBLIC_` 变量里，也不要在浏览器侧使用。
+
+演示账号只用于本地前端 fallback。Worker 默认不接受 mock 身份头；生产环境不要设置 `ALLOW_MOCK_AUTH=true`。外部登录接口申请期间，如需本地 Worker 联调，可以在本机 `workers/api/.dev.vars` 或 `.dev.vars` 中临时设置：
+
+```env
+ALLOW_MOCK_AUTH=true
+```
+
+`NEXT_PUBLIC_RUNTIME_MODE` 控制前端 provider/adapter 选择：
+
+- `mock`：默认，演示账号和本地 provider 全部可用。
+- `hybrid`：用于逐步接入 Worker 或第三方 API，同时保留本地 fallback。
+- `real`：不允许 mock 登录；第三方平台、视频处理和支付接口未配置前会进入人工/本地占位，不会悄悄调用 mock 登录或第三方网络。
 
 ## Supabase 配置
 
@@ -106,4 +119,4 @@ GET  /integrations
 POST /clip-tasks
 ```
 
-当前 Next.js 页面仍使用本地 mock 状态。下一步可以把 `lib/local-store.ts` 中的操作逐个替换为 Cloudflare Worker API 调用。
+当前 Next.js 页面仍保留本地 mock 状态。`lib/providers` 已经隔离登录、平台数据、视频处理和打款能力；在真实登录、平台数据、视频处理和打款接口未申请完成前，所有外部能力都应通过 provider/adapter 方式接入，页面不直接依赖第三方 SDK。

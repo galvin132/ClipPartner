@@ -9,6 +9,7 @@ head_sampling_rate = 1
 
 [vars]
 APP_ENV = "development"
+ALLOW_MOCK_AUTH = "false"
 FRONTEND_ORIGIN = "https://clip-partner.vercel.app"
 NEXT_PUBLIC_SUPABASE_URL = "https://qhlesjopsqzcefsyjvgk.supabase.co"
 R2_BUCKET_NAME = "clip-partner-assets"
@@ -38,3 +39,8 @@ crons = ["*/30 * * * *"]
 # wrangler secret put FFMPEG_WORKER_TOKEN
 # wrangler secret put DOUYIN_APP_SECRET
 # wrangler secret put WECHAT_CHANNELS_APP_SECRET
+
+# Mock auth is intentionally off by default. For local Worker demos that must
+# accept the frontend demo account headers while third-party auth is pending,
+# set ALLOW_MOCK_AUTH=true in a local `.dev.vars` file. Never enable it for
+# production.

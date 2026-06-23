@@ -52,6 +52,7 @@ npm run dev
 
 ```bash
 npm run typecheck
+npm run test
 npm run lint
 npm run build
 npm run smoke
@@ -70,6 +71,18 @@ npm run smoke
 | 部署 | Vercel + Cloudflare |
 
 当前版本保留 localStorage / mock fallback，方便本地演示和开发；生产环境可逐步接入微信 OAuth、抖音/视频号平台数据、精选联盟数据、R2 直传、FFmpeg 切片和打款接口。
+
+外部接口申请期间，前端可以继续使用演示账号和本地 fallback。Worker 默认不接受前端伪造的 mock 角色头；如果本地联调确实要让 Worker 接受演示账号请求，请只在本机 `.dev.vars` 中设置 `ALLOW_MOCK_AUTH=true`。生产环境必须保持关闭，并改用 Supabase/微信 OAuth 的 Bearer token。
+
+### Runtime / Provider 模式
+
+外部接口未完成申请前，页面不要直接依赖第三方 SDK。统一从 `lib/providers` 进入：
+
+- `NEXT_PUBLIC_RUNTIME_MODE=mock`：默认模式，使用演示账号、本地平台核验、本地视频任务和模拟打款记录。
+- `NEXT_PUBLIC_RUNTIME_MODE=hybrid`：用于本地/测试联调，保留 mock fallback，同时允许逐步接入已配置的 API。
+- `NEXT_PUBLIC_RUNTIME_MODE=real`：不再允许 mock 登录；平台数据转人工复核，视频和支付走本地/人工占位，不发起第三方网络请求。
+
+后续接微信登录、Supabase Auth、抖音/视频号数据、FFmpeg 或打款接口时，只替换 provider/adapter 实现，页面和本地 fallback 流程保持不变。
 
 ## 对外介绍话术
 

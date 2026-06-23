@@ -2,6 +2,7 @@
   "name": "clip-partner",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "engines": {
     "node": ">=22.13.0"
   },
@@ -9,9 +10,10 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "test": "node --experimental-strip-types --test tests/*.test.mjs",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "verify": "npm run typecheck && npm run lint && npm run build && npm run worker:types && npm audit",
+    "verify": "npm run typecheck && npm run test && npm run lint && npm run build && npm run worker:types && npm audit",
     "smoke": "node scripts/smoke.mjs",
     "persistence:smoke": "node scripts/persistence-smoke.mjs",
     "worker:types": "node ./node_modules/wrangler/bin/wrangler.js types --config workers/api/wrangler.toml",

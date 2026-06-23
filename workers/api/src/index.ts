@@ -2,6 +2,14 @@
 
 import { AwsClient } from "aws4fetch";
 import { z } from "zod";
+import {
+  allowMissingSessionForMockRead,
+  isMockAuthAllowed,
+  isUserRole,
+  routeRoles,
+  taskClaimOwnershipFilter,
+  type UserRole
+} from "./auth-policy.ts";
 
 type PlatformValue = "douyin" | "wechat_channels";
 const DOUYIN_LABEL = "\u6296\u97f3";
@@ -34,7 +42,6 @@ type DistributionTaskStatus = "draft" | "open" | "paused" | "closed";
 type TaskClaimStatus = "claimed" | "downloaded" | "submitted" | "overdue" | "verified" | "invalid" | "settled";
 type WalletTransactionType = "commission" | "adjustment" | "freeze" | "payout";
 type WalletTransactionStatus = "available" | "frozen" | "pending" | "paid";
-type UserRole = "admin" | "reviewer" | "finance" | "partner";
 type SessionProvider = "mock" | "supabase";
 
 type RequestSession = {
@@ -55,7 +62,6 @@ type SupabaseAuthUser = {
   user_metadata?: Record<string, unknown>;
 };
 
-const USER_ROLES = new Set<UserRole>(["admin", "reviewer", "finance", "partner"]);
 const ROLE_LABELS: Record<UserRole, string> = {
   admin: "\u7ba1\u7406\u5458",
   reviewer: "\u5ba1\u6838\u5458",
@@ -183,13 +189,15 @@ const jsonHeaders = {
 };
 
 class ApiError extends Error {
-  constructor(
-    public code: string,
-    message: string,
-    public status = 400,
-    public details?: unknown
-  ) {
+  code: string;
+  status: number;
+  details?: unknown;
+
+  constructor(code: string, message: string, status = 400, details?: unknown) {
     super(message);
+    this.code = code;
+    this.status = status;
+    this.details = details;
   }
 }
 
@@ -447,10 +455,6 @@ function isUsableProduct(product?: {
   );
 }
 
-function isUserRole(value: string | null): value is UserRole {
-  return Boolean(value && USER_ROLES.has(value as UserRole));
-}
-
 function roleFromAppMetadata(appMetadata: Record<string, unknown> | undefined): UserRole {
   const role = typeof appMetadata?.role === "string" ? appMetadata.role : undefined;
   if (role === "operator") return "reviewer";
@@ -521,6 +525,8 @@ async function readSupabaseSession(env: WorkerEnv, request: Request): Promise<Re
 }
 
 function readMockSession(request: Request): RequestSession | null {
+  if (request.headers.get("x-clip-auth-provider") !== "mock") return null;
+
   const role = request.headers.get("x-clip-role");
   if (!isUserRole(role)) return null;
 
@@ -534,70 +540,7 @@ function readMockSession(request: Request): RequestSession | null {
 }
 
 async function readRequestSession(env: WorkerEnv, request: Request): Promise<RequestSession | null> {
-  return (await readSupabaseSession(env, request)) ?? readMockSession(request);
-}
-
-function routeRoles(pathname: string, method: string): UserRole[] | null {
-  if (pathname === "/notifications" || /^\/notifications\/[^/]+\/read$/.test(pathname)) {
-    return ["admin", "reviewer", "finance", "partner"];
-  }
-
-  if (method !== "GET") {
-    if (pathname === "/authorization-requests" || /^\/materials\/[^/]+\/claim$/.test(pathname)) {
-      return ["partner"];
-    }
-
-    if (pathname === "/account-bindings" || /^\/publish-records\/[^/]+\/submit$/.test(pathname)) {
-      return ["partner"];
-    }
-
-    if (/^\/authorization-requests\/[^/]+$/.test(pathname) || /^\/account-bindings\/[^/]+$/.test(pathname)) {
-      return ["admin", "reviewer"];
-    }
-
-    if (
-      pathname === "/materials" ||
-      pathname === "/products" ||
-      pathname === "/clip-tasks" ||
-      pathname === "/recordings/direct-upload/init" ||
-      pathname === "/recordings/direct-upload/complete" ||
-      pathname === "/recordings/upload" ||
-      pathname === "/risk-records" ||
-      /^\/materials\/[^/]+(\/product)?$/.test(pathname) ||
-      /^\/clip-tasks\/[^/]+(\/complete)?$/.test(pathname) ||
-      /^\/products\/[^/]+$/.test(pathname) ||
-      /^\/risk-records\/[^/]+$/.test(pathname) ||
-      /^\/publish-records\/[^/]+(\/performance)?$/.test(pathname)
-    ) {
-      return ["admin", "reviewer"];
-    }
-
-    if (pathname === "/state/reset" || pathname.startsWith("/settlements/") || pathname === "/settlements/generate") {
-      return ["admin", "finance"];
-    }
-  }
-
-  if (pathname.startsWith("/admin/settlements")) {
-    return ["admin", "finance"];
-  }
-
-  if (pathname.startsWith("/admin/risk-events")) {
-    return ["admin", "reviewer"];
-  }
-
-  if (pathname.startsWith("/admin/")) {
-    return ["admin", "reviewer"];
-  }
-
-  if (pathname.startsWith("/partner/") || /^\/claims\/[^/]+\/(download-url|submit)$/.test(pathname)) {
-    return ["partner"];
-  }
-
-  return null;
-}
-
-function allowMissingSessionForMockRead(env: WorkerEnv, request: Request) {
-  return request.method === "GET" && (env.ALLOW_MOCK_AUTH === "true" || env.APP_ENV !== "production");
+  return (await readSupabaseSession(env, request)) ?? (isMockAuthAllowed(env) ? readMockSession(request) : null);
 }
 
 async function authorizeRequest(request: Request, env: WorkerEnv, pathname: string) {
@@ -609,7 +552,7 @@ async function authorizeRequest(request: Request, env: WorkerEnv, pathname: stri
   }
 
   if (!session) {
-    if (allowMissingSessionForMockRead(env, request)) {
+    if (allowMissingSessionForMockRead(env, request.method)) {
       return null;
     }
     throw new ApiError("unauthenticated", "Missing ClipPartner session headers", 401);
@@ -991,6 +934,14 @@ async function findOrCreateDistributorForSession(
 async function distributorFilterForSession(env: WorkerEnv, session: RequestSession | null) {
   const distributor = await findDistributorForSession(env, session);
   return distributor ? filterParam("distributor_id", "eq", distributor.id) : filterParam("distributor_id", "eq", "00000000-0000-0000-0000-000000000000");
+}
+
+async function taskClaimFilterForSession(env: WorkerEnv, claimId: string, session: RequestSession) {
+  const distributor = await findDistributorForSession(env, session);
+  if (!distributor) {
+    throw new ApiError("not_found", "Task claim not found", 404);
+  }
+  return taskClaimOwnershipFilter(claimId, distributor.id);
 }
 
 async function findOrCreateIp(env: WorkerEnv, name: string, platform: string) {
@@ -2986,8 +2937,9 @@ async function claimDistributionTask(
   });
 }
 
-async function createClaimDownloadUrl(env: WorkerEnv, claimId: string, request: Request) {
-  const claim = first(await selectRows<{ id: string }>(env, "task_claims", `select=id&id=eq.${claimId}&limit=1`));
+async function createClaimDownloadUrl(env: WorkerEnv, claimId: string, request: Request, session: RequestSession) {
+  const claimFilter = await taskClaimFilterForSession(env, claimId, session);
+  const claim = first(await selectRows<{ id: string }>(env, "task_claims", `select=id&${claimFilter}&limit=1`));
   if (!claim) throw new ApiError("not_found", "Task claim not found", 404);
   const token = await insertRow<{ token: string; expires_at: string }>(env, "download_tokens", {
     task_claim_id: claim.id,
@@ -3007,7 +2959,8 @@ async function createClaimDownloadUrl(env: WorkerEnv, claimId: string, request: 
   };
 }
 
-async function submitTaskClaim(env: WorkerEnv, claimId: string, input: z.infer<typeof taskClaimSubmitSchema>) {
+async function submitTaskClaim(env: WorkerEnv, claimId: string, input: z.infer<typeof taskClaimSubmitSchema>, session: RequestSession) {
+  const claimFilter = await taskClaimFilterForSession(env, claimId, session);
   const claim = first(
     await selectRows<{
       id: string;
@@ -3018,7 +2971,7 @@ async function submitTaskClaim(env: WorkerEnv, claimId: string, input: z.infer<t
     }>(
       env,
       "task_claims",
-      `select=id,distribution_task_id,distributor_id,clip_asset_id,product_id&id=eq.${claimId}&limit=1`
+      `select=id,distribution_task_id,distributor_id,clip_asset_id,product_id&${claimFilter}&limit=1`
     )
   );
   if (!claim) throw new ApiError("not_found", "Task claim not found", 404);
@@ -3454,13 +3407,13 @@ const worker = {
 
       const claimDownloadMatch = url.pathname.match(/^\/claims\/([^/]+)\/download-url$/);
       if (claimDownloadMatch && request.method === "POST") {
-        const downloadToken = await createClaimDownloadUrl(env, claimDownloadMatch[1], request);
+        const downloadToken = await createClaimDownloadUrl(env, claimDownloadMatch[1], request, requirePartnerSession(requestSession));
         return json({ ...(await listState(env)), downloadToken }, env, { status: 201 });
       }
 
       const claimSubmitMatch = url.pathname.match(/^\/claims\/([^/]+)\/submit$/);
       if (claimSubmitMatch && request.method === "POST") {
-        await submitTaskClaim(env, claimSubmitMatch[1], await readJson(request, taskClaimSubmitSchema));
+        await submitTaskClaim(env, claimSubmitMatch[1], await readJson(request, taskClaimSubmitSchema), requirePartnerSession(requestSession));
         return json(await listState(env), env);
       }
 

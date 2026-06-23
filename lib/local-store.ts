@@ -22,8 +22,15 @@ import {
   trainingCourses as seedTrainingCourses,
   walletTransactions as seedWalletTransactions
 } from "./mock-data";
+import { apiBase, apiJson, optionalApiJson } from "./api-client";
 import { readAppSettings } from "./app-settings";
 import { reportClientIssue } from "./client-observability";
+import {
+  applyPublishVerificationResult,
+  buildLocalClipTask,
+  buildWalletTransactionFromProvider
+} from "./provider-actions";
+import { providers } from "./providers";
 import { getProductValidity } from "./product-rules";
 import type {
   AccountBinding,
@@ -57,38 +64,6 @@ import type {
 } from "./domain";
 
 const STORAGE_KEY = "clip-partner-mvp-state-v1";
-const AUTH_STORAGE_KEY = "clip-partner-auth-session-v1";
-const AUTH_ROLES = new Set(["admin", "reviewer", "finance", "partner"]);
-
-function sessionHeaders() {
-  if (typeof window === "undefined") return {};
-
-  try {
-    const raw = window.localStorage.getItem(AUTH_STORAGE_KEY);
-    if (!raw) return {};
-    const session = JSON.parse(raw) as {
-      id?: unknown;
-      role?: unknown;
-      displayName?: unknown;
-      authProvider?: unknown;
-      accessToken?: unknown;
-    };
-    if (typeof session.role !== "string" || !AUTH_ROLES.has(session.role)) return {};
-
-    const headers: Record<string, string> = {
-      "x-clip-role": session.role,
-      "x-clip-user-id": typeof session.id === "string" ? session.id : `mock-${session.role}`,
-      "x-clip-display-name": typeof session.displayName === "string" ? session.displayName : "",
-      "x-clip-auth-provider": session.authProvider === "supabase" ? "supabase" : "mock"
-    };
-    if (session.authProvider === "supabase" && typeof session.accessToken === "string" && session.accessToken) {
-      headers.authorization = `Bearer ${session.accessToken}`;
-    }
-    return headers;
-  } catch {
-    return {};
-  }
-}
 
 export type ClipPartnerState = {
   accountBindings: AccountBinding[];
@@ -192,10 +167,6 @@ const initialState: ClipPartnerState = {
   walletTransactions: seedWalletTransactions
 };
 
-function apiBase() {
-  return process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "");
-}
-
 function loadLocalState(): ClipPartnerState {
   if (typeof window === "undefined") {
     return initialState;
@@ -229,20 +200,13 @@ function isSameLocalDay(value: string) {
 
 function addLocalClipTaskState(
   current: ClipPartnerState,
-  input: Pick<ClipTask, "recordingTitle" | "ipName" | "sourcePlatform">
+  input: Pick<ClipTask, "recordingTitle" | "ipName" | "sourcePlatform">,
+  providerResult?: { taskId: string }
 ): ClipPartnerState {
   return {
     ...current,
     clipTasks: [
-      {
-        id: nextId("TASK"),
-        status: "queued",
-        progress: 0,
-        outputCount: 0,
-        errorMessage: "",
-        createdAt: nowText(),
-        ...input
-      },
+      buildLocalClipTask(input, providerResult ?? { taskId: nextId("TASK") }, nowText()),
       ...current.clipTasks
     ]
   };
@@ -310,67 +274,8 @@ function listQuery(params: ListParams = {}) {
   return search.toString();
 }
 
-async function apiJson<T>(path: string, init: RequestInit = {}) {
-  const base = apiBase();
-  if (!base) {
-    return null;
-  }
-
-  const method = init.method ?? "GET";
-  let response: Response;
-
-  try {
-    const headers = new Headers(init.headers);
-    if (!headers.has("content-type")) {
-      headers.set("content-type", "application/json");
-    }
-    Object.entries(sessionHeaders()).forEach(([key, value]) => headers.set(key, value));
-
-    response = await fetch(`${base}${path}`, {
-      ...init,
-      headers
-    });
-  } catch (error) {
-    void reportClientIssue("api_error", error instanceof Error ? error.message : "API request failed", {
-      severity: "error",
-      feature: "remote_api",
-      details: {
-        method,
-        path,
-        error: error instanceof Error ? error.message : "Unknown error"
-      }
-    });
-    throw error;
-  }
-
-  if (!response.ok) {
-    const detail = await response.text();
-    void reportClientIssue("api_error", `API ${method} ${path} failed with ${response.status}`, {
-      severity: response.status >= 500 ? "error" : "warn",
-      feature: "remote_api",
-      details: {
-        method,
-        path,
-        status: response.status,
-        detail: detail.slice(0, 500)
-      }
-    });
-    throw new Error(detail);
-  }
-
-  return (await response.json()) as T;
-}
-
 async function apiRequest(path: string, init: RequestInit = {}) {
   return apiJson<ClipPartnerState>(path, init);
-}
-
-async function optionalApiJson<T>(path: string) {
-  try {
-    return await apiJson<T>(path);
-  } catch {
-    return null;
-  }
 }
 
 async function loadRemoteState() {
@@ -846,11 +751,14 @@ export function useClipPartnerStore() {
   }
 
   function addClipTask(input: Pick<ClipTask, "recordingTitle" | "ipName" | "sourcePlatform">) {
-    void syncMutation(
-      "/clip-tasks",
-      { method: "POST", body: JSON.stringify(input) },
-      () => addLocalClipTaskState(state, input)
-    );
+    void (async () => {
+      const providerResult = await providers.video.createClipTask(input);
+      await syncMutation(
+        "/clip-tasks",
+        { method: "POST", body: JSON.stringify(input) },
+        () => addLocalClipTaskState(state, input, providerResult)
+      );
+    })();
   }
 
   function updateClipTaskStatus(id: string, status: ClipTaskStatus) {
@@ -1296,7 +1204,16 @@ export function useClipPartnerStore() {
   }
 
   function autoReviewPublishRecord(id: string) {
-    setState((current) => {
+    void (async () => {
+      const record = state.publishRecords.find((item) => item.id === id);
+      if (!record) return;
+      const providerResult = await providers.platformData.verifyPublishUrl({
+        publishUrl: record.publishUrl ?? "",
+        productName: record.productName,
+        platform: record.platform
+      });
+
+      setState((current) => {
       const record = current.publishRecords.find((item) => item.id === id);
       if (!record) return current;
 
@@ -1348,17 +1265,11 @@ export function useClipPartnerStore() {
         };
       }
 
-      if (url.includes("valid")) {
+      if (providerResult.status !== "manual_review") {
         return {
           ...current,
           publishRecords: current.publishRecords.map((item) =>
-            item.id === id
-              ? {
-                  ...item,
-                  status: "verified",
-                  reviewNote: "模拟核验：作品链接命中 valid，账号和商品挂载通过。"
-                }
-              : item
+            item.id === id ? applyPublishVerificationResult(item, providerResult) : item
           )
         };
       }
@@ -1376,6 +1287,7 @@ export function useClipPartnerStore() {
         )
       };
     });
+    })();
   }
 
   function updatePublishStatus(id: string, status: PublishStatus) {
@@ -1538,21 +1450,25 @@ export function useClipPartnerStore() {
   function addWalletTransaction(input: Pick<WalletTransaction, "distributorName" | "type" | "amount" | "status" | "source" | "note">) {
     const { distributorName: _distributorName, ...remoteInput } = input;
     void _distributorName;
-    void syncMutation(
-      "/partner/wallet/transactions",
-      { method: "POST", body: JSON.stringify(remoteInput) },
-      () => ({
-        ...state,
-        walletTransactions: [
-          {
-            id: nextId("WT"),
-            createdAt: nowText(),
-            ...input
-          },
-          ...state.walletTransactions
-        ]
-      })
-    );
+    void (async () => {
+      const providerResult =
+        input.type === "payout"
+          ? await providers.payment.createPayoutRecord(input)
+          : input.type === "freeze"
+            ? await providers.payment.freezeWalletAmount(input)
+            : {};
+      await syncMutation(
+        "/partner/wallet/transactions",
+        { method: "POST", body: JSON.stringify(remoteInput) },
+        () => ({
+          ...state,
+          walletTransactions: [
+            buildWalletTransactionFromProvider(input, providerResult, nextId("WT"), nowText()),
+            ...state.walletTransactions
+          ]
+        })
+      );
+    })();
   }
 
   function markNotificationRead(id: string) {

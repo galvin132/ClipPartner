@@ -1,3 +1,5 @@
+import { mockHeadersForApiPath } from "./smoke-headers.mjs";
+
 const frontendBase = process.env.SMOKE_FRONTEND_BASE || "http://127.0.0.1:3000";
 const apiBase = process.env.SMOKE_API_BASE || "http://127.0.0.1:8787";
 
@@ -34,24 +36,24 @@ const apiPaths = [
 ];
 
 const targets = [
-  ...frontendPaths.map((path) => `${frontendBase}${path}`),
-  ...apiPaths.map((path) => `${apiBase}${path}`)
+  ...frontendPaths.map((path) => ({ url: `${frontendBase}${path}` })),
+  ...apiPaths.map((path) => ({ url: `${apiBase}${path}`, headers: mockHeadersForApiPath(path) }))
 ];
 
 let hasFailure = false;
 
 for (const target of targets) {
   try {
-    const response = await fetch(target);
+    const response = await fetch(target.url, { headers: target.headers });
     if (!response.ok) {
       hasFailure = true;
-      console.error(`${target} -> ${response.status}`);
+      console.error(`${target.url} -> ${response.status}`);
       continue;
     }
-    console.log(`${target} -> ${response.status}`);
+    console.log(`${target.url} -> ${response.status}`);
   } catch (error) {
     hasFailure = true;
-    console.error(`${target} -> ${error instanceof Error ? error.message : "failed"}`);
+    console.error(`${target.url} -> ${error instanceof Error ? error.message : "failed"}`);
   }
 }
 

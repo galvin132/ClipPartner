@@ -1,9 +1,8 @@
 "use client";
 
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
-import { authenticateMockUser, getDefaultPath, mockUsers, toSession, type AuthSession, type UserRole } from "@/lib/auth";
-
-const STORAGE_KEY = "clip-partner-auth-session-v1";
+import { getDefaultPath, type AuthSession, type UserRole } from "@/lib/auth";
+import { createAuthProvider } from "@/lib/providers/auth-provider";
 
 type AuthContextValue = {
   session: AuthSession | null;
@@ -17,45 +16,23 @@ type AuthContextValue = {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-function readStoredSession() {
-  if (typeof window === "undefined") return null;
-  const raw = window.localStorage.getItem(STORAGE_KEY);
-  if (!raw) return null;
-
-  try {
-    return JSON.parse(raw) as AuthSession;
-  } catch {
-    window.localStorage.removeItem(STORAGE_KEY);
-    return null;
-  }
-}
-
-function storeSession(session: AuthSession | null) {
-  if (typeof window === "undefined") return;
-  if (session) {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(session));
-  } else {
-    window.localStorage.removeItem(STORAGE_KEY);
-  }
-}
-
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<AuthSession | null>(null);
   const [isHydrated, setIsHydrated] = useState(false);
+  const provider = useMemo(() => createAuthProvider(), []);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      setSession(readStoredSession());
+      setSession(provider.getStoredSession());
       setIsHydrated(true);
     }, 0);
 
     return () => window.clearTimeout(timer);
-  }, []);
+  }, [provider]);
 
   const value = useMemo<AuthContextValue>(() => {
-    function setAndStore(nextSession: AuthSession | null) {
+    function setCurrentSession(nextSession: AuthSession | null) {
       setSession(nextSession);
-      storeSession(nextSession);
       return nextSession;
     }
 
@@ -63,21 +40,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       session,
       isHydrated,
       login(username, password) {
-        return setAndStore(authenticateMockUser(username, password));
+        return setCurrentSession(provider.login(username, password));
       },
       loginAs(username) {
-        const user = mockUsers.find((item) => item.username === username);
-        return setAndStore(user ? toSession(user) : null);
+        return setCurrentSession(provider.loginAs(username));
       },
       logout() {
-        setAndStore(null);
+        provider.logout();
+        setCurrentSession(null);
       },
       defaultPath: session ? getDefaultPath(session.role) : "/login",
       hasRole(roles) {
         return Boolean(session && roles.includes(session.role));
       }
     };
-  }, [isHydrated, session]);
+  }, [isHydrated, provider, session]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
