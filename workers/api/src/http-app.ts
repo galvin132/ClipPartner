@@ -3,7 +3,7 @@ import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import type { Context } from "hono";
 
 import { handleBetterAuthRequest } from "./better-auth.ts";
-import type { WorkerEnv } from "./index.ts";
+import type { WorkerEnv } from "./env.ts";
 
 type AppEnv = {
   Bindings: WorkerEnv;

@@ -2,7 +2,7 @@ import { betterAuth } from "better-auth";
 import { admin, bearer } from "better-auth/plugins";
 import { Pool } from "pg";
 
-import type { WorkerEnv } from "./index.ts";
+import type { WorkerEnv } from "./env.ts";
 
 type ClipPartnerAuth = {
   handler: (request: Request) => Promise<Response>;

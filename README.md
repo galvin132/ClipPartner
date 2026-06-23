@@ -126,3 +126,4 @@ Cloudflare R2 用于素材、视频、录屏、证据文件。上传、下载和
 
 - [Cloudflare / Supabase / Vercel 部署说明](./docs/deployment-cloudflare-supabase-vercel.md)
 - [架构优化方案](./docs/architecture-optimization-plan.md)
+- [架构执行待办](./docs/architecture-execution-todo.md)

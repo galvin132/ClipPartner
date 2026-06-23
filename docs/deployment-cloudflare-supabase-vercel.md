@@ -30,7 +30,7 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=
 
 1. 创建 Supabase 项目。
 2. 执行 `supabase/schema.sql` 或现有迁移。
-3. 执行 `supabase/migrations/20260623200336_better_auth_gateway_foundation.sql`。
+3. 执行 `supabase/migrations/20260623202057_better_auth_gateway_foundation.sql`。
 4. 保存 Project URL、anon key、service role key。
 
 当前方案中 Supabase 只作为 Postgres 数据库，不作为 App/Web 主数据直连通道。
@@ -63,19 +63,20 @@ npx wrangler r2 bucket create clip-partner-assets
 npx wrangler queues create clip-partner-clip-tasks
 ```
 
-创建 Hyperdrive，连接 Supabase Postgres direct connection string：
+创建 Hyperdrive，连接 Supabase Postgres direct connection string。认证库建议禁用 SQL 缓存，避免 session 或用户角色读到旧值：
 
 ```bash
 npx wrangler hyperdrive create clip-partner-supabase \
-  --connection-string="postgresql://<user>:<password>@<supabase-host>:5432/postgres"
+  --connection-string="postgresql://<user>:<password>@<supabase-host>:5432/postgres?sslmode=require" \
+  --caching-disabled
 ```
 
-拿到 Hyperdrive id 后，在 `workers/api/wrangler.toml` 中添加：
+当前项目已创建 Hyperdrive：
 
 ```toml
 [[hyperdrive]]
 binding = "HYPERDRIVE"
-id = "<hyperdrive-id>"
+id = "d294784a3c4440b1939989e8123f5098"
 ```
 
 Worker secrets：
@@ -147,3 +148,5 @@ npm run verify
 - `GET /openapi.json`
 - `GET /docs`
 - `GET /api/auth/get-session`
+
+后续未执行项见 [`docs/architecture-execution-todo.md`](./architecture-execution-todo.md)。

@@ -21,6 +21,7 @@ supabase/.temp/
 
 # Local-only planning and research notes
 .local/
+**/.local/
 ClipPartner项目实施方案.md
 docs/*roadmap*.md
 docs/*research*.md

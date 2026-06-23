@@ -8,7 +8,7 @@ enabled = true
 head_sampling_rate = 1
 
 [vars]
-APP_ENV = "development"
+APP_ENV = "production"
 ALLOW_MOCK_AUTH = "false"
 FRONTEND_ORIGIN = "https://clip-partner.vercel.app"
 NEXT_PUBLIC_SUPABASE_URL = "https://qhlesjopsqzcefsyjvgk.supabase.co"
@@ -27,10 +27,9 @@ queue = "clip-partner-clip-tasks"
 max_batch_size = 5
 max_batch_timeout = 30
 
-# Add this after creating Hyperdrive for the Supabase direct connection:
-# [[hyperdrive]]
-# binding = "HYPERDRIVE"
-# id = "<hyperdrive-id>"
+[[hyperdrive]]
+binding = "HYPERDRIVE"
+id = "d294784a3c4440b1939989e8123f5098"
 
 [triggers]
 crons = ["*/30 * * * *"]

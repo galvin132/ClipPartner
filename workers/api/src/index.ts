@@ -11,7 +11,11 @@ import {
   type UserRole
 } from "./auth-policy.ts";
 import { handleBetterAuthRequest } from "./better-auth.ts";
+import type { WorkerEnv } from "./env.ts";
+import { ApiError } from "./errors.ts";
 import { createApiApp } from "./http-app.ts";
+import { corsHeaders, errorJson, json, logError, readJson } from "./http-utils.ts";
+import { deleteByFilter, deleteRows, insertRow, patchRows, selectRows } from "./supabase-rest.ts";
 
 type PlatformValue = "douyin" | "wechat_channels";
 const DOUYIN_LABEL = "\u6296\u97f3";
@@ -184,42 +188,6 @@ type ListMeta = {
   count: number;
   nextOffset: number | null;
 };
-
-export type WorkerEnv = Cloudflare.Env & {
-  APP_ENV?: string;
-  ALLOW_MOCK_AUTH?: string;
-  FRONTEND_ORIGIN: string;
-  BETTER_AUTH_SECRET?: string;
-  BETTER_AUTH_URL?: string;
-  BETTER_AUTH_DATABASE_URL?: string;
-  HYPERDRIVE?: Hyperdrive;
-  NEXT_PUBLIC_SUPABASE_URL: string;
-  NEXT_PUBLIC_SUPABASE_ANON_KEY?: string;
-  SUPABASE_SERVICE_ROLE_KEY: string;
-  R2_ACCOUNT_ID?: string;
-  R2_ACCESS_KEY_ID?: string;
-  R2_SECRET_ACCESS_KEY?: string;
-  R2_BUCKET_NAME?: string;
-  CLIP_PARTNER_BUCKET: R2Bucket;
-  CLIP_TASK_QUEUE: Queue;
-};
-
-const jsonHeaders = {
-  "content-type": "application/json; charset=utf-8"
-};
-
-class ApiError extends Error {
-  code: string;
-  status: number;
-  details?: unknown;
-
-  constructor(code: string, message: string, status = 400, details?: unknown) {
-    super(message);
-    this.code = code;
-    this.status = status;
-    this.details = details;
-  }
-}
 
 const platformSchema = z.union([
   z.literal("douyin"),
@@ -654,142 +622,6 @@ function requirePartnerSession(session: RequestSession | null): RequestSession {
     throw new ApiError("forbidden", "This action requires a distributor session", 403);
   }
   return current;
-}
-
-function corsHeaders(env: WorkerEnv) {
-  return {
-    "access-control-allow-origin": env.FRONTEND_ORIGIN || "*",
-    "access-control-allow-methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
-    "access-control-allow-headers": "content-type,authorization,x-clip-role,x-clip-user-id,x-clip-display-name,x-clip-auth-provider"
-  };
-}
-
-function json(data: unknown, env: WorkerEnv, init: ResponseInit = {}) {
-  return new Response(JSON.stringify(data), {
-    ...init,
-    headers: {
-      ...jsonHeaders,
-      ...corsHeaders(env),
-      ...init.headers
-    }
-  });
-}
-
-function errorJson(error: unknown, env: WorkerEnv) {
-  if (error instanceof ApiError) {
-    return json(
-      {
-        error: {
-          code: error.code,
-          message: error.message,
-          details: error.details
-        }
-      },
-      env,
-      { status: error.status }
-    );
-  }
-
-  return json(
-    {
-      error: {
-        code: "internal_error",
-        message: error instanceof Error ? error.message : "Unknown error"
-      }
-    },
-    env,
-    { status: 500 }
-  );
-}
-
-function logError(request: Request, error: unknown) {
-  console.error(
-    JSON.stringify({
-      level: "error",
-      path: new URL(request.url).pathname,
-      message: error instanceof Error ? error.message : "Unknown error"
-    })
-  );
-}
-
-async function readJson<T>(request: Request, schema: z.ZodType<T>) {
-  const body = await request.json().catch(() => {
-    throw new ApiError("invalid_json", "Request body must be valid JSON", 400);
-  });
-  const parsed = schema.safeParse(body);
-
-  if (!parsed.success) {
-    throw new ApiError("validation_error", "Request body validation failed", 422, z.flattenError(parsed.error));
-  }
-
-  return parsed.data;
-}
-
-function requireSupabase(env: WorkerEnv) {
-  if (!env.NEXT_PUBLIC_SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) {
-    throw new ApiError("supabase_not_configured", "Supabase is not configured", 503);
-  }
-
-  return {
-    restUrl: `${env.NEXT_PUBLIC_SUPABASE_URL.replace(/\/$/, "")}/rest/v1`,
-    serviceKey: env.SUPABASE_SERVICE_ROLE_KEY
-  };
-}
-
-async function supabase<T>(env: WorkerEnv, path: string, init: RequestInit = {}): Promise<T> {
-  const { restUrl, serviceKey } = requireSupabase(env);
-  const response = await fetch(`${restUrl}${path}`, {
-    ...init,
-    headers: {
-      apikey: serviceKey,
-      authorization: `Bearer ${serviceKey}`,
-      "content-type": "application/json",
-      ...init.headers
-    }
-  });
-
-  if (!response.ok) {
-    const detail = await response.text();
-    throw new Error(`Supabase request failed ${response.status}: ${detail}`);
-  }
-
-  if (response.status === 204) {
-    return undefined as T;
-  }
-
-  return response.json() as Promise<T>;
-}
-
-async function selectRows<T>(env: WorkerEnv, table: string, query = "select=*") {
-  return supabase<T[]>(env, `/${table}?${query}`);
-}
-
-async function insertRow<T>(env: WorkerEnv, table: string, body: Record<string, unknown>) {
-  return supabase<T[]>(env, `/${table}`, {
-    method: "POST",
-    headers: { prefer: "return=representation" },
-    body: JSON.stringify(body)
-  }).then((rows) => rows[0]);
-}
-
-async function patchRows<T>(env: WorkerEnv, table: string, filter: string, body: Record<string, unknown>) {
-  return supabase<T[]>(env, `/${table}?${filter}`, {
-    method: "PATCH",
-    headers: { prefer: "return=representation" },
-    body: JSON.stringify(body)
-  });
-}
-
-async function deleteByFilter(env: WorkerEnv, table: string, filter: string) {
-  await supabase<void>(env, `/${table}?${filter}`, {
-    method: "DELETE"
-  });
-}
-
-async function deleteRows(env: WorkerEnv, table: string) {
-  await supabase<void>(env, `/${table}?id=not.is.null`, {
-    method: "DELETE"
-  });
 }
 
 function eq(column: string, value: string) {
