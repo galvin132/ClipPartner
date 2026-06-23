@@ -11,7 +11,7 @@ import { useClipPartnerStore } from "@/lib/local-store";
 
 export default function PartnerWalletPage() {
   return (
-    <AuthGate roles={["admin", "partner"]}>
+    <AuthGate roles={["partner"]}>
       <PartnerWalletExperience />
     </AuthGate>
   );
@@ -21,7 +21,7 @@ function PartnerWalletExperience() {
   const router = useRouter();
   const { session, logout } = useAuth();
   const { state, addWalletTransaction, refreshRemoteList } = useClipPartnerStore();
-  const distributorName = session?.role === "partner" ? session.displayName : "周婧";
+  const distributorName = session?.displayName ?? "";
   useEffect(() => {
     void refreshRemoteList("walletTransactions", { limit: 50 });
     void refreshRemoteList("publishRecords", { limit: 50 });

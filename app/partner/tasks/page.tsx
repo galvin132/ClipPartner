@@ -11,7 +11,7 @@ import { useClipPartnerStore } from "@/lib/local-store";
 
 export default function PartnerTasksPage() {
   return (
-    <AuthGate roles={["admin", "partner"]}>
+    <AuthGate roles={["partner"]}>
       <PartnerTasksExperience />
     </AuthGate>
   );
@@ -21,7 +21,7 @@ function PartnerTasksExperience() {
   const router = useRouter();
   const { session, logout } = useAuth();
   const { state, claimDistributionTask, submitTaskClaim, refreshRemoteList } = useClipPartnerStore();
-  const distributorName = session?.role === "partner" ? session.displayName : "周婧";
+  const distributorName = session?.displayName ?? "";
   const [query, setQuery] = useState("");
   const [links, setLinks] = useState<Record<string, string>>({});
   useEffect(() => {

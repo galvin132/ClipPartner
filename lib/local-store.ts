@@ -57,6 +57,28 @@ import type {
 } from "./domain";
 
 const STORAGE_KEY = "clip-partner-mvp-state-v1";
+const AUTH_STORAGE_KEY = "clip-partner-auth-session-v1";
+const AUTH_ROLES = new Set(["admin", "reviewer", "finance", "partner"]);
+
+function sessionHeaders() {
+  if (typeof window === "undefined") return {};
+
+  try {
+    const raw = window.localStorage.getItem(AUTH_STORAGE_KEY);
+    if (!raw) return {};
+    const session = JSON.parse(raw) as { id?: unknown; role?: unknown; displayName?: unknown };
+    if (typeof session.role !== "string" || !AUTH_ROLES.has(session.role)) return {};
+
+    return {
+      "x-clip-role": session.role,
+      "x-clip-user-id": typeof session.id === "string" ? session.id : `mock-${session.role}`,
+      "x-clip-display-name": typeof session.displayName === "string" ? session.displayName : "",
+      "x-clip-auth-provider": "mock"
+    };
+  } catch {
+    return {};
+  }
+}
 
 export type ClipPartnerState = {
   accountBindings: AccountBinding[];
@@ -288,12 +310,15 @@ async function apiJson<T>(path: string, init: RequestInit = {}) {
   let response: Response;
 
   try {
+    const headers = new Headers(init.headers);
+    if (!headers.has("content-type")) {
+      headers.set("content-type", "application/json");
+    }
+    Object.entries(sessionHeaders()).forEach(([key, value]) => headers.set(key, value));
+
     response = await fetch(`${base}${path}`, {
       ...init,
-      headers: {
-        "content-type": "application/json",
-        ...init.headers
-      }
+      headers
     });
   } catch (error) {
     void reportClientIssue("api_error", error instanceof Error ? error.message : "API request failed", {

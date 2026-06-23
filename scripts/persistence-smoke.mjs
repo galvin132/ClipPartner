@@ -48,12 +48,22 @@ const names = {
 };
 
 async function api(path, init = {}) {
+  const headers = new Headers(init.headers);
+  headers.set("content-type", "application/json");
+  if (path.startsWith("/admin/")) {
+    headers.set("x-clip-role", "admin");
+    headers.set("x-clip-user-id", "smoke-admin");
+    headers.set("x-clip-display-name", "Smoke Admin");
+  } else if (path.startsWith("/partner/") || path.startsWith("/claims/")) {
+    headers.set("x-clip-role", "partner");
+    headers.set("x-clip-user-id", "smoke-partner");
+    headers.set("x-clip-display-name", names.distributor);
+  }
+  headers.set("x-clip-auth-provider", "mock");
+
   const response = await fetch(`${apiBase}${path}`, {
     ...init,
-    headers: {
-      "content-type": "application/json",
-      ...init.headers
-    }
+    headers
   });
   const text = await response.text();
   const body = text ? JSON.parse(text) : null;

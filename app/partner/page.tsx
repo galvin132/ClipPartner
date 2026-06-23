@@ -12,7 +12,7 @@ import { useClipPartnerStore } from "@/lib/local-store";
 
 export default function PartnerPage() {
   return (
-    <AuthGate roles={["admin", "partner"]}>
+    <AuthGate roles={["partner"]}>
       <PartnerDashboard />
     </AuthGate>
   );
@@ -22,7 +22,7 @@ function PartnerDashboard() {
   const router = useRouter();
   const { session, logout } = useAuth();
   const { state, markNotificationRead, syncStatus, refreshRemoteList } = useClipPartnerStore();
-  const distributorName = session?.role === "partner" ? session.displayName : "周婧";
+  const distributorName = session?.displayName ?? "";
   useEffect(() => {
     void refreshRemoteList("distributorProfiles", { limit: 50 });
     void refreshRemoteList("formalAuthorizations", { limit: 50 });

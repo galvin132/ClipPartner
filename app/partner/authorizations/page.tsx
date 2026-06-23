@@ -11,7 +11,7 @@ import { useClipPartnerStore } from "@/lib/local-store";
 
 export default function PartnerAuthorizationsPage() {
   return (
-    <AuthGate roles={["admin", "partner"]}>
+    <AuthGate roles={["partner"]}>
       <PartnerAuthorizationsExperience />
     </AuthGate>
   );
@@ -21,7 +21,7 @@ function PartnerAuthorizationsExperience() {
   const router = useRouter();
   const { session, logout } = useAuth();
   const { state, addAuthorizationRequest, refreshRemoteList } = useClipPartnerStore();
-  const distributorName = session?.role === "partner" ? session.displayName : "周婧";
+  const distributorName = session?.displayName ?? "";
   useEffect(() => {
     void refreshRemoteList("distributorProfiles", { limit: 50 });
     void refreshRemoteList("accountBindings", { limit: 50 });

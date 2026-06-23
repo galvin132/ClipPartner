@@ -65,11 +65,7 @@ const routePermissions: Record<UserRole, string[]> = {
     "/admin/products",
     "/admin/publish-records",
     "/admin/risk",
-    "/admin/settings",
-    "/partner",
-    "/partner/authorizations",
-    "/partner/tasks",
-    "/partner/wallet"
+    "/admin/settings"
   ],
   finance: ["/", "/admin/publish-records", "/admin/settlements", "/admin/settings"],
   partner: ["/partner", "/partner/accounts", "/partner/onboarding", "/partner/authorizations", "/partner/tasks", "/partner/wallet"]

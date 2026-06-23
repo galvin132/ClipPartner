@@ -25,7 +25,7 @@ const bindingStatusTone: Record<AccountBindingStatus, string> = {
 
 export default function PartnerAccountsPage() {
   return (
-    <AuthGate roles={["admin", "partner"]}>
+    <AuthGate roles={["partner"]}>
       <PartnerAccountsExperience />
     </AuthGate>
   );
@@ -35,7 +35,7 @@ function PartnerAccountsExperience() {
   const router = useRouter();
   const { session, logout } = useAuth();
   const { state, addAccountBinding, addAuthorizationRequest, syncStatus } = useClipPartnerStore();
-  const distributorName = session?.role === "partner" ? session.displayName : "周婧";
+  const distributorName = session?.displayName ?? "";
   const [query, setQuery] = useState("");
   const [platform, setPlatform] = useState<"抖音" | "视频号">("视频号");
   const [accountName, setAccountName] = useState("");

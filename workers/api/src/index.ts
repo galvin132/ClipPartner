@@ -34,6 +34,22 @@ type DistributionTaskStatus = "draft" | "open" | "paused" | "closed";
 type TaskClaimStatus = "claimed" | "downloaded" | "submitted" | "overdue" | "verified" | "invalid" | "settled";
 type WalletTransactionType = "commission" | "adjustment" | "freeze" | "payout";
 type WalletTransactionStatus = "available" | "frozen" | "pending" | "paid";
+type UserRole = "admin" | "reviewer" | "finance" | "partner";
+
+type RequestSession = {
+  id: string;
+  role: UserRole;
+  displayName: string;
+  isMock: boolean;
+};
+
+const USER_ROLES = new Set<UserRole>(["admin", "reviewer", "finance", "partner"]);
+const ROLE_LABELS: Record<UserRole, string> = {
+  admin: "\u7ba1\u7406\u5458",
+  reviewer: "\u5ba1\u6838\u5458",
+  finance: "\u8d22\u52a1",
+  partner: "\u5206\u53d1\u8005"
+};
 
 type AuthorizationRequestInput = {
   distributorName: string;
@@ -136,6 +152,8 @@ type ListMeta = {
 };
 
 type WorkerEnv = Cloudflare.Env & {
+  APP_ENV?: string;
+  ALLOW_MOCK_AUTH?: string;
   FRONTEND_ORIGIN: string;
   NEXT_PUBLIC_SUPABASE_URL: string;
   SUPABASE_SERVICE_ROLE_KEY: string;
@@ -416,11 +434,79 @@ function isUsableProduct(product?: {
   );
 }
 
+function isUserRole(value: string | null): value is UserRole {
+  return Boolean(value && USER_ROLES.has(value as UserRole));
+}
+
+function readRequestSession(request: Request): RequestSession | null {
+  const role = request.headers.get("x-clip-role");
+  if (!isUserRole(role)) return null;
+
+  return {
+    id: request.headers.get("x-clip-user-id")?.trim() || `mock-${role}`,
+    role,
+    displayName: request.headers.get("x-clip-display-name")?.trim() || ROLE_LABELS[role],
+    isMock: request.headers.get("x-clip-auth-provider") !== "supabase"
+  };
+}
+
+function routeRoles(pathname: string): UserRole[] | null {
+  if (pathname === "/notifications" || /^\/notifications\/[^/]+\/read$/.test(pathname)) {
+    return ["admin", "reviewer", "finance", "partner"];
+  }
+
+  if (pathname.startsWith("/admin/settlements")) {
+    return ["admin", "finance"];
+  }
+
+  if (pathname.startsWith("/admin/risk-events")) {
+    return ["admin", "reviewer"];
+  }
+
+  if (pathname.startsWith("/admin/")) {
+    return ["admin", "reviewer"];
+  }
+
+  if (pathname.startsWith("/partner/") || /^\/claims\/[^/]+\/(download-url|submit)$/.test(pathname)) {
+    return ["partner"];
+  }
+
+  return null;
+}
+
+function allowMissingSessionForMockRead(env: WorkerEnv, request: Request) {
+  return request.method === "GET" && (env.ALLOW_MOCK_AUTH === "true" || env.APP_ENV !== "production");
+}
+
+function authorizeRequest(request: Request, env: WorkerEnv, pathname: string) {
+  const allowedRoles = routeRoles(pathname);
+  const session = readRequestSession(request);
+
+  if (!allowedRoles) {
+    return session;
+  }
+
+  if (!session) {
+    if (allowMissingSessionForMockRead(env, request)) {
+      return null;
+    }
+    throw new ApiError("unauthenticated", "Missing ClipPartner session headers", 401);
+  }
+
+  if (!allowedRoles.includes(session.role)) {
+    throw new ApiError("forbidden", `Role ${session.role} cannot access ${pathname}`, 403, {
+      allowedRoles
+    });
+  }
+
+  return session;
+}
+
 function corsHeaders(env: WorkerEnv) {
   return {
     "access-control-allow-origin": env.FRONTEND_ORIGIN || "*",
     "access-control-allow-methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
-    "access-control-allow-headers": "content-type,authorization"
+    "access-control-allow-headers": "content-type,authorization,x-clip-role,x-clip-user-id,x-clip-display-name,x-clip-auth-provider"
   };
 }
 
@@ -2297,8 +2383,9 @@ async function partnerWalletResponse(env: WorkerEnv, options = listOptions(new U
   return { wallet, walletTransactions: items, meta };
 }
 
-async function getMe(env: WorkerEnv) {
-  const session = mockSession();
+async function getMe(env: WorkerEnv, request: Request) {
+  const session = mockSession(readRequestSession(request) ?? undefined);
+  const distributorName = session.distributor?.displayName ?? DEFAULT_DISTRIBUTOR_NAME;
   const rows = await safeRows(() =>
     selectRows<{
       id: string;
@@ -2308,7 +2395,7 @@ async function getMe(env: WorkerEnv) {
     }>(
       env,
       "distributor_profiles",
-      `select=id,display_name,onboarding_status,credit_score&${eq("display_name", DEFAULT_DISTRIBUTOR_NAME)}&limit=1`
+      `select=id,display_name,onboarding_status,credit_score&${eq("display_name", distributorName)}&limit=1`
     )
   );
   const profile = first(rows);
@@ -2943,22 +3030,29 @@ async function readBody<T>(request: Request) {
   return request.json().catch(() => ({})) as Promise<T>;
 }
 
-function mockSession() {
+function mockSession(session?: RequestSession) {
+  const role = session?.role ?? "partner";
+  const displayName = session?.displayName || (role === "partner" ? DEFAULT_DISTRIBUTOR_NAME : ROLE_LABELS[role]);
+  const distributor =
+    role === "partner"
+      ? {
+          id: "demo-distributor",
+          displayName,
+          onboardingStatus: "ready_for_authorization",
+          creditScore: 96
+        }
+      : null;
+
   return {
     user: {
-      id: "user-partner",
-      displayName: "周婧",
-      role: "partner",
-      roleLabel: "分发者"
+      id: session?.id ?? `user-${role}`,
+      displayName,
+      role,
+      roleLabel: ROLE_LABELS[role]
     },
-    distributor: {
-      id: "demo-distributor",
-      displayName: "周婧",
-      onboardingStatus: "ready_for_authorization",
-      creditScore: 96
-    },
+    distributor,
     providers: {
-      authProvider: "mock",
+      authProvider: session?.isMock === false ? "supabase" : "mock",
       videoProvider: "mock",
       platformDataProvider: "mock",
       paymentProvider: "manual"
@@ -3024,8 +3118,10 @@ const worker = {
       }
 
       if (url.pathname === "/me") {
-        return json(await getMe(env), env);
+        return json(await getMe(env, request), env);
       }
+
+      authorizeRequest(request, env, url.pathname);
 
       if (url.pathname === "/admin/distributors" && request.method === "GET") {
         const { items, meta } = await listDistributors(env, listOptions(url.searchParams));

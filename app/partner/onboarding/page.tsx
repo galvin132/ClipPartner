@@ -19,7 +19,7 @@ const steps = [
 
 export default function PartnerOnboardingPage() {
   return (
-    <AuthGate roles={["admin", "partner"]}>
+    <AuthGate roles={["partner"]}>
       <PartnerOnboardingExperience />
     </AuthGate>
   );
@@ -29,7 +29,7 @@ function PartnerOnboardingExperience() {
   const router = useRouter();
   const { session, logout } = useAuth();
   const { state, recordExamAttempt, signAgreement, updateDistributorOnboarding, refreshRemoteList } = useClipPartnerStore();
-  const distributorName = session?.role === "partner" ? session.displayName : "周婧";
+  const distributorName = session?.displayName ?? "";
   useEffect(() => {
     void refreshRemoteList("distributorProfiles", { limit: 50 });
     void refreshRemoteList("accountBindings", { limit: 50 });
