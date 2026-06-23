@@ -1,10 +1,40 @@
-import { KeyRound, ServerCog } from "lucide-react";
+"use client";
+
+import { useEffect, useState } from "react";
+import { KeyRound, Save, ServerCog } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
+import { defaultAppSettings, normalizeRiskKeywords, readAppSettings, type RuntimeMode, writeAppSettings } from "@/lib/app-settings";
 import { getIntegrationReadiness } from "@/lib/integration-config";
 
 export default function SettingsPage() {
   const integrations = getIntegrationReadiness();
+  const [runtimeMode, setRuntimeMode] = useState<RuntimeMode>(defaultAppSettings.runtimeMode);
+  const [commissionShare, setCommissionShare] = useState(defaultAppSettings.commissionShare);
+  const [dailyClaimLimit, setDailyClaimLimit] = useState(defaultAppSettings.dailyClaimLimit);
+  const [riskKeywords, setRiskKeywords] = useState(defaultAppSettings.riskKeywords.join(", "));
+  const [savedAt, setSavedAt] = useState("");
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const settings = readAppSettings();
+      setRuntimeMode(settings.runtimeMode);
+      setCommissionShare(settings.commissionShare);
+      setDailyClaimLimit(settings.dailyClaimLimit);
+      setRiskKeywords(settings.riskKeywords.join(", "));
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  function saveLocalRules() {
+    writeAppSettings({
+      runtimeMode,
+      commissionShare,
+      dailyClaimLimit,
+      riskKeywords: normalizeRiskKeywords(riskKeywords)
+    });
+    setSavedAt(new Date().toLocaleString("zh-CN", { hour12: false }));
+  }
 
   return (
     <AppShell active="/admin/settings">
@@ -18,6 +48,65 @@ export default function SettingsPage() {
           </a>
         }
       />
+
+      <section className="content-grid" style={{ marginBottom: 18 }}>
+        <div className="content-card">
+          <h2 className="section-title">运行模式</h2>
+          <div className="filter-bar">
+            <select
+              className="select"
+              value={runtimeMode}
+              onChange={(event) => setRuntimeMode(event.target.value as RuntimeMode)}
+              aria-label="运行模式"
+            >
+              <option value="mock">Mock 模式：全部外部接口用模拟数据</option>
+              <option value="hybrid">混合模式：已配置接口走真实服务，其余模拟</option>
+              <option value="real">真实模式：所有关键接口必须配置</option>
+            </select>
+            <button className="button primary" onClick={saveLocalRules}>
+              <Save size={16} aria-hidden /> 保存本地规则
+            </button>
+          </div>
+          <p className="item-meta">
+            当前选择：{runtimeMode === "mock" ? "Mock 模式" : runtimeMode === "hybrid" ? "混合模式" : "真实模式"}
+            {savedAt ? ` · 已保存 ${savedAt}` : ""}
+          </p>
+        </div>
+
+        <div className="content-card">
+          <h2 className="section-title">业务规则</h2>
+          <div className="settings-grid">
+            <label>
+              <span>分发者佣金分成</span>
+              <input
+                className="input"
+                type="number"
+                min={0}
+                max={100}
+                value={commissionShare}
+                onChange={(event) => setCommissionShare(Number(event.target.value))}
+              />
+            </label>
+            <label>
+              <span>单账号每日领取上限</span>
+              <input
+                className="input"
+                type="number"
+                min={0}
+                value={dailyClaimLimit}
+                onChange={(event) => setDailyClaimLimit(Number(event.target.value))}
+              />
+            </label>
+            <label className="settings-wide">
+              <span>风控关键词</span>
+              <input className="input" value={riskKeywords} onChange={(event) => setRiskKeywords(event.target.value)} />
+            </label>
+          </div>
+          <p className="item-meta">
+            当前模拟结算规则：平台佣金的 {commissionShare}% 结算给分发者；领取超过 {dailyClaimLimit} 条后需要运营复核。
+          </p>
+        </div>
+      </section>
 
       <section className="table-card">
         <div className="table-header">

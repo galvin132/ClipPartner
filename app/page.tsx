@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { ArrowRight, CheckCircle2, Download, FileVideo2, RotateCcw, ShieldCheck } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
@@ -12,6 +13,27 @@ const metricIcons = [ShieldCheck, FileVideo2, Download, CheckCircle2];
 
 export default function DashboardPage() {
   const { state, metrics, resetDemoData } = useClipPartnerStore();
+  const publishFunnel = [
+    { label: "已领取", value: state.publishRecords.filter((record) => record.status === "downloaded").length },
+    { label: "待审核", value: state.publishRecords.filter((record) => record.status === "submitted").length },
+    { label: "已核验", value: state.publishRecords.filter((record) => record.status === "verified").length },
+    { label: "不合规", value: state.publishRecords.filter((record) => record.status === "invalid").length }
+  ];
+  const topMaterials = [...state.materials].sort((a, b) => b.claims + b.downloads - (a.claims + a.downloads)).slice(0, 5);
+  const distributorRank = Object.values(
+    state.publishRecords.reduce<Record<string, { name: string; posts: number; gmv: number; commission: number }>>(
+      (acc, record) => {
+        acc[record.distributorName] ??= { name: record.distributorName, posts: 0, gmv: 0, commission: 0 };
+        acc[record.distributorName].posts += 1;
+        acc[record.distributorName].gmv += record.gmv;
+        acc[record.distributorName].commission += record.commission;
+        return acc;
+      },
+      {}
+    )
+  )
+    .sort((a, b) => b.gmv - a.gmv)
+    .slice(0, 5);
   const dashboardMetrics = [
     {
       label: "待审核授权",
@@ -47,9 +69,9 @@ export default function DashboardPage() {
             <button className="button" onClick={resetDemoData}>
               <RotateCcw size={16} aria-hidden /> 重置演示数据
             </button>
-            <a className="button primary" href="/admin/materials">
+            <Link className="button primary" href="/admin/materials">
               创建切片任务
-            </a>
+            </Link>
           </>
         }
       />
@@ -140,6 +162,71 @@ export default function DashboardPage() {
                 </td>
                 <td>{money(record.gmv)}</td>
                 <td>{money(record.commission)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+
+      <section className="content-grid" style={{ marginTop: 18 }}>
+        <div className="content-card">
+          <h2 className="section-title">发布核验漏斗</h2>
+          <div className="analytics-grid">
+            {publishFunnel.map((item) => (
+              <div className="analytics-cell" key={item.label}>
+                <span>{item.label}</span>
+                <strong>{item.value}</strong>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="content-card">
+          <h2 className="section-title">分发者排行</h2>
+          <div className="workflow">
+            {distributorRank.map((item, index) => (
+              <div className="workflow-row" key={item.name}>
+                <span className="step-index">{index + 1}</span>
+                <div>
+                  <div className="step-title">{item.name}</div>
+                  <div className="step-desc">
+                    {item.posts} 条作品 · GMV {money(item.gmv)} · 佣金 {money(item.commission)}
+                  </div>
+                </div>
+                <ArrowRight size={18} aria-hidden />
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section className="table-card" style={{ marginTop: 18 }}>
+        <div className="table-header">
+          <h2 className="table-title">高领取素材排行</h2>
+          <span className="badge info">按领取 + 下载次数排序</span>
+        </div>
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>素材</th>
+              <th>IP</th>
+              <th>商品</th>
+              <th>领取</th>
+              <th>下载</th>
+              <th>状态</th>
+            </tr>
+          </thead>
+          <tbody>
+            {topMaterials.map((material) => (
+              <tr key={material.id}>
+                <td>{material.title}</td>
+                <td>{material.ipName}</td>
+                <td>{material.productName}</td>
+                <td>{material.claims}</td>
+                <td>{material.downloads}</td>
+                <td>
+                  <StatusBadge status={material.status} />
+                </td>
               </tr>
             ))}
           </tbody>

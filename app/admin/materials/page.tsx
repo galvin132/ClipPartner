@@ -1,11 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { Archive, FileUp, Link2, Plus, Scissors, Search, UploadCloud } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
 import { StatusBadge } from "@/components/Badge";
 import { useClipPartnerStore } from "@/lib/local-store";
+import { getProductValidity } from "@/lib/product-rules";
 
 export default function MaterialsPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -37,7 +39,7 @@ export default function MaterialsPage() {
     const matchesStatus = statusFilter === "all" || material.status === statusFilter;
     return matchesKeyword && matchesStatus;
   });
-  const activeProducts = state.products.filter((product) => product.isActive);
+  const activeProducts = state.products.filter((product) => getProductValidity(state.products, product.name, product.platform).isValid);
 
   return (
     <AppShell active="/admin/materials">
@@ -134,13 +136,16 @@ export default function MaterialsPage() {
               <th>来源</th>
               <th>标签</th>
               <th>绑定商品</th>
+              <th>质量 / 有效期</th>
               <th>领取 / 下载</th>
               <th>状态</th>
               <th>操作</th>
             </tr>
           </thead>
           <tbody>
-            {materials.map((material) => (
+            {materials.map((material) => {
+              const productValidity = getProductValidity(state.products, material.productName, material.sourcePlatform);
+              return (
               <tr key={material.id}>
                 <td>
                   <div className="item-title">{material.title}</div>
@@ -159,7 +164,15 @@ export default function MaterialsPage() {
                     ))}
                   </div>
                 </td>
-                <td>{material.productName}</td>
+                <td>
+                  <div className="item-title">{material.productName}</div>
+                  {!productValidity.isValid ? <div className="item-meta">{productValidity.reason}</div> : null}
+                </td>
+                <td>
+                  <div className="item-title">{material.qualityScore ?? 0} 分</div>
+                  <div className="item-meta">有效至 {material.expiresAt ?? "待设置"}</div>
+                  <div className="item-meta">{material.sellingPoint ?? "待补充卖点"}</div>
+                </td>
                 <td>
                   {material.claims} / {material.downloads}
                 </td>
@@ -168,6 +181,9 @@ export default function MaterialsPage() {
                 </td>
                 <td>
                   <div className="toolbar">
+                    <Link className="button" href={`/admin/materials/${material.id}`} title="查看详情" aria-label="查看详情">
+                      详情
+                    </Link>
                     <button
                       className="button"
                       title="绑定启用商品"
@@ -181,8 +197,9 @@ export default function MaterialsPage() {
                     </button>
                     <button
                       className="button"
-                      title="设为可领取"
+                      title={productValidity.isValid ? "设为可领取" : productValidity.reason}
                       aria-label="设为可领取"
+                      disabled={!productValidity.isValid}
                       onClick={() => updateMaterialStatus(material.id, "published")}
                     >
                       <UploadCloud size={16} aria-hidden />
@@ -206,7 +223,8 @@ export default function MaterialsPage() {
                   </div>
                 </td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       </section>

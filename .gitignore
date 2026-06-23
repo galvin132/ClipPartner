@@ -2,15 +2,29 @@
 node_modules/
 out/
 dist/
+
+# Local environment files
 .env
 .env.local
+.env.development
+.env.production
 .env.*.local
 .dev.vars
 workers/**/.dev.vars
+
+# Generated local artifacts
 worker-configuration.d.ts
 workers/**/.wrangler/
+.vercel/
+*.tsbuildinfo
+
+# Local-only planning and research notes
+.local/
+ClipPartner项目实施方案.md
+docs/*roadmap*.md
+docs/*research*.md
+
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
-*.tsbuildinfo

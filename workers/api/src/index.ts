@@ -6,6 +6,10 @@ import { z } from "zod";
 type PlatformValue = "douyin" | "wechat_channels";
 const DOUYIN_LABEL = "\u6296\u97f3";
 const WECHAT_CHANNELS_LABEL = "\u89c6\u9891\u53f7";
+const DEFAULT_DISTRIBUTOR_NAME = "\u5468\u5a67";
+const DEFAULT_AGREEMENT_NAME = "\u76f4\u64ad\u5207\u7247\u6388\u6743\u5408\u4f5c\u534f\u8bae";
+const DEFAULT_AGREEMENT_VERSION = "2026.06";
+const MOCK_USER_ID = "00000000-0000-0000-0000-000000000001";
 type PlatformLabel = typeof DOUYIN_LABEL | typeof WECHAT_CHANNELS_LABEL;
 
 type AuthorizationStatus = "pending" | "approved" | "rejected" | "paused" | "banned" | "expired";
@@ -13,6 +17,23 @@ type MaterialStatus = "draft" | "processing" | "ready" | "published" | "archived
 type PublishStatus = "claimed" | "downloaded" | "submitted" | "verified" | "invalid" | "settled";
 type SettlementStatus = "pending" | "confirmed" | "paid" | "blocked";
 type RiskStatus = "pending" | "open" | "warning" | "blocked" | "resolved";
+type AccountBindingStatus = "pending" | "approved" | "rejected" | "paused";
+type ClipTaskStatus = "queued" | "processing" | "completed" | "failed";
+type OnboardingStatus =
+  | "registered"
+  | "profile_pending"
+  | "account_pending"
+  | "training_pending"
+  | "exam_failed"
+  | "agreement_pending"
+  | "ready_for_authorization"
+  | "suspended"
+  | "banned";
+type AuthorizationPoolStatus = "open" | "paused" | "full";
+type DistributionTaskStatus = "draft" | "open" | "paused" | "closed";
+type TaskClaimStatus = "claimed" | "downloaded" | "submitted" | "overdue" | "verified" | "invalid" | "settled";
+type WalletTransactionType = "commission" | "adjustment" | "freeze" | "payout";
+type WalletTransactionStatus = "available" | "frozen" | "pending" | "paid";
 
 type AuthorizationRequestInput = {
   distributorName: string;
@@ -41,6 +62,22 @@ type RiskRecordInput = {
   account: string;
   issue: string;
   workUrl: string;
+};
+
+type AccountBindingInput = {
+  distributorName: string;
+  platform: string;
+  accountName: string;
+  homepageUrl: string;
+  followers: number;
+  category: string;
+  note?: string;
+};
+
+type ClipTaskInput = {
+  recordingTitle: string;
+  ipName: string;
+  sourcePlatform: string;
 };
 
 type DirectUploadInitInput = {
@@ -163,12 +200,30 @@ const riskRecordSchema = z.object({
   workUrl: z.url().max(1000)
 });
 
+const accountBindingSchema = z.object({
+  distributorName: nonEmptyString.max(80),
+  platform: platformSchema,
+  accountName: nonEmptyString.max(120),
+  homepageUrl: z.url().max(1000),
+  followers: z.coerce.number().int().min(0).max(999999999),
+  category: nonEmptyString.max(120),
+  note: z.string().trim().max(500).optional()
+});
+
+const clipTaskSchema = z.object({
+  recordingTitle: nonEmptyString.max(180),
+  ipName: nonEmptyString.max(120),
+  sourcePlatform: platformSchema
+});
+
 const statusSchemas = {
   authorization: z.object({ status: z.enum(["pending", "approved", "rejected", "paused", "banned", "expired"]) }),
   material: z.object({ status: z.enum(["draft", "processing", "ready", "published", "archived"]) }),
   publish: z.object({ status: z.enum(["claimed", "downloaded", "submitted", "verified", "invalid", "settled"]) }),
   settlement: z.object({ status: z.enum(["pending", "confirmed", "paid", "blocked"]) }),
   risk: z.object({ status: z.enum(["pending", "open", "warning", "blocked", "resolved"]) }),
+  accountBinding: z.object({ status: z.enum(["pending", "approved", "rejected", "paused"]) }),
+  clipTask: z.object({ status: z.enum(["queued", "processing", "completed", "failed"]) }),
   product: z.object({ isActive: z.boolean() })
 };
 
@@ -206,6 +261,118 @@ const materialProductSchema = z.object({
   productId: uuidSchema
 });
 
+const onboardingStatusSchema = z.enum([
+  "registered",
+  "profile_pending",
+  "account_pending",
+  "training_pending",
+  "exam_failed",
+  "agreement_pending",
+  "ready_for_authorization",
+  "suspended",
+  "banned"
+]);
+
+const authorizationPoolStatusSchema = z.enum(["open", "paused", "full"]);
+const distributionTaskStatusSchema = z.enum(["draft", "open", "paused", "closed"]);
+const walletTransactionTypeSchema = z.enum(["commission", "adjustment", "freeze", "payout"]);
+const walletTransactionStatusSchema = z.enum(["available", "frozen", "pending", "paid"]);
+
+const partnerProfileSchema = z.object({
+  distributorName: nonEmptyString.max(80).optional(),
+  displayName: nonEmptyString.max(80).optional(),
+  phone: z.string().trim().max(40).optional(),
+  wechatId: z.string().trim().max(120).optional(),
+  onboardingStatus: onboardingStatusSchema.optional()
+});
+
+const examAttemptSchema = z.object({
+  distributorName: nonEmptyString.max(80).optional(),
+  score: z.coerce.number().int().min(0).max(100),
+  answers: z.record(z.string(), z.unknown()).optional()
+});
+
+const agreementSignSchema = z.object({
+  distributorName: nonEmptyString.max(80).optional(),
+  templateName: nonEmptyString.max(160).optional(),
+  version: nonEmptyString.max(40).optional()
+});
+
+const authorizationPoolSchema = z.object({
+  ipName: nonEmptyString.max(120),
+  platform: platformSchema,
+  totalQuota: z.coerce.number().int().min(0).max(100000),
+  minCreditScore: z.coerce.number().int().min(0).max(100).default(80),
+  defaultShareRate: z.coerce.number().min(0).max(100).default(30),
+  dailyClaimLimit: z.coerce.number().int().min(0).max(10000).default(10),
+  requirement: z.string().trim().max(1000).default("")
+});
+
+const authorizationPoolPatchSchema = z.object({
+  status: authorizationPoolStatusSchema
+});
+
+const authorizationReviewSchema = z.object({
+  status: z.enum(["approved", "rejected", "paused", "banned", "expired"]),
+  reviewNote: z.string().trim().max(1000).optional()
+});
+
+const distributionTaskSchema = z.object({
+  title: nonEmptyString.max(180),
+  ipName: nonEmptyString.max(120),
+  platform: platformSchema,
+  productName: nonEmptyString.max(180),
+  materialIds: z.array(z.string().trim().min(1).max(120)).default([]),
+  endAt: z.string().trim().max(80).optional(),
+  rewardRule: z.string().trim().max(1000).default(""),
+  claimLimit: z.coerce.number().int().min(0).max(100000).default(0),
+  requirement: z.string().trim().max(1000).default("")
+});
+
+const distributionTaskPatchSchema = z.object({
+  status: distributionTaskStatusSchema
+});
+
+const taskClaimSchema = z.object({
+  distributorName: nonEmptyString.max(80).optional()
+});
+
+const taskClaimSubmitSchema = z.object({
+  publishUrl: z.url().max(1000)
+});
+
+const walletTransactionSchema = z.object({
+  distributorName: nonEmptyString.max(80).optional(),
+  type: walletTransactionTypeSchema,
+  amount: z.coerce.number().min(-999999999).max(999999999),
+  status: walletTransactionStatusSchema,
+  source: nonEmptyString.max(500),
+  note: z.string().trim().max(1000).optional()
+});
+
+const riskEventSchema = z.object({
+  distributorName: nonEmptyString.max(80).optional(),
+  publishRecordId: z.string().uuid().optional(),
+  taskClaimId: z.string().uuid().optional(),
+  title: nonEmptyString.max(180),
+  description: nonEmptyString.max(1000)
+});
+
+const riskActionSchema = z.object({
+  actionType: nonEmptyString.max(80),
+  note: z.string().trim().max(1000).optional(),
+  status: z.string().trim().max(40).optional(),
+  creditDelta: z.coerce.number().int().min(-100).max(100).optional(),
+  freezeWallet: z.boolean().optional(),
+  pauseAuthorization: z.boolean().optional()
+});
+
+const appealSchema = z.object({
+  distributorName: nonEmptyString.max(80).optional(),
+  riskEventId: z.string().uuid().optional(),
+  reason: nonEmptyString.max(1000)
+});
+
 const platformToLabel: Record<PlatformValue, PlatformLabel> = {
   douyin: DOUYIN_LABEL,
   wechat_channels: WECHAT_CHANNELS_LABEL
@@ -218,6 +385,35 @@ function toPlatformValue(value: string | undefined): PlatformValue {
 
 function toPlatformLabel(value: string | undefined): PlatformLabel {
   return toPlatformValue(value) === "wechat_channels" ? WECHAT_CHANNELS_LABEL : DOUYIN_LABEL;
+}
+
+function toTaskUiStatus(status: string | undefined): ClipTaskStatus {
+  if (status === "running") return "processing";
+  if (status === "succeeded") return "completed";
+  if (status === "dead") return "failed";
+  if (status === "processing" || status === "completed" || status === "failed") return status;
+  return "queued";
+}
+
+function toTaskDbStatus(status: ClipTaskStatus) {
+  if (status === "processing") return "running";
+  if (status === "completed") return "succeeded";
+  return status;
+}
+
+function isUsableProduct(product?: {
+  is_active?: boolean | null;
+  commission_rate?: number | string | null;
+  affiliate_url?: string | null;
+} | null) {
+  const commissionRate = Number(product?.commission_rate ?? 0);
+  return Boolean(
+    product?.is_active &&
+      product.affiliate_url &&
+      /^https?:\/\//i.test(product.affiliate_url) &&
+      commissionRate > 0 &&
+      commissionRate <= 100
+  );
 }
 
 function corsHeaders(env: WorkerEnv) {
@@ -360,6 +556,10 @@ function eq(column: string, value: string) {
   return `${column}=eq.${encodeURIComponent(value)}`;
 }
 
+function inList(column: string, values: string[]) {
+  return `${column}=in.(${values.map((value) => encodeURIComponent(value)).join(",")})`;
+}
+
 function first<T>(rows: T[]) {
   return rows[0];
 }
@@ -399,6 +599,72 @@ function listMeta<T>(items: T[], options: ListOptions): ListMeta {
   };
 }
 
+async function safeRows<T>(read: () => Promise<T[]>) {
+  try {
+    return await read();
+  } catch (error) {
+    console.warn(
+      JSON.stringify({
+        level: "warn",
+        message: "Optional Supabase table or view is unavailable",
+        detail: error instanceof Error ? error.message : "Unknown error"
+      })
+    );
+    return [] as T[];
+  }
+}
+
+async function safeList<T>(read: () => Promise<{ items: T[]; meta: ListMeta }>) {
+  try {
+    return await read();
+  } catch (error) {
+    console.warn(
+      JSON.stringify({
+        level: "warn",
+        message: "Optional list endpoint failed",
+        detail: error instanceof Error ? error.message : "Unknown error"
+      })
+    );
+    const options = listOptions(new URLSearchParams());
+    return { items: [] as T[], meta: listMeta([], options) };
+  }
+}
+
+function formatDateTime(value: string | null | undefined) {
+  if (!value) return new Date().toLocaleString("zh-CN", { hour12: false });
+  return new Date(value).toLocaleString("zh-CN", { hour12: false });
+}
+
+function dateOnly(value: string | null | undefined) {
+  if (!value) return new Date().toISOString().slice(0, 10);
+  return new Date(value).toISOString().slice(0, 10);
+}
+
+function isUuid(value: string | undefined) {
+  return Boolean(value && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value));
+}
+
+function asOnboardingStatus(value: string | null | undefined): OnboardingStatus {
+  if (
+    value === "registered" ||
+    value === "profile_pending" ||
+    value === "account_pending" ||
+    value === "training_pending" ||
+    value === "exam_failed" ||
+    value === "agreement_pending" ||
+    value === "ready_for_authorization" ||
+    value === "suspended" ||
+    value === "banned"
+  ) {
+    return value;
+  }
+  return "registered";
+}
+
+function nextExpiry(minutes: number) {
+  return new Date(Date.now() + minutes * 60 * 1000).toISOString();
+}
+
 function filterParam(column: string, operator: string, value: string) {
   return `${column}=${operator}.${encodeURIComponent(value)}`;
 }
@@ -427,12 +693,27 @@ async function findOrCreateDistributor(env: WorkerEnv, displayName: string, phon
   );
   if (first(existing)) return first(existing);
 
-  return insertRow<{ id: string }>(env, "distributor_profiles", {
-    user_id: crypto.randomUUID(),
-    display_name: displayName,
-    phone,
-    status: "approved"
-  });
+  const userId = crypto.randomUUID();
+  try {
+    return await insertRow<{ id: string }>(env, "distributor_profiles", {
+      user_id: userId,
+      display_name: displayName,
+      phone,
+      status: "approved",
+      wechat_id: "",
+      onboarding_status: "registered",
+      credit_score: 100,
+      exam_score: 0,
+      agreement_signed: false
+    });
+  } catch {
+    return insertRow<{ id: string }>(env, "distributor_profiles", {
+      user_id: userId,
+      display_name: displayName,
+      phone,
+      status: "approved"
+    });
+  }
 }
 
 async function findOrCreateIp(env: WorkerEnv, name: string, platform: string) {
@@ -463,7 +744,8 @@ async function findOrCreateSocialAccount(
   return insertRow<{ id: string }>(env, "social_accounts", {
     distributor_id: distributorId,
     platform: toPlatformValue(platform),
-    account_name: accountName
+    account_name: accountName,
+    status: "approved"
   });
 }
 
@@ -503,6 +785,31 @@ async function createAuthorizationRequest(env: WorkerEnv, input: AuthorizationRe
   });
 }
 
+async function createAccountBinding(env: WorkerEnv, input: AccountBindingInput) {
+  const distributor = await findOrCreateDistributor(env, input.distributorName);
+  const body = {
+    distributor_id: distributor.id,
+    platform: toPlatformValue(input.platform),
+    account_name: input.accountName,
+    account_url: input.homepageUrl,
+    followers: input.followers,
+    category: input.category,
+    status: "pending",
+    binding_note: input.note ?? ""
+  };
+
+  try {
+    await insertRow(env, "social_accounts", body);
+  } catch {
+    await insertRow(env, "social_accounts", {
+      distributor_id: distributor.id,
+      platform: toPlatformValue(input.platform),
+      account_name: input.accountName,
+      account_url: input.homepageUrl
+    });
+  }
+}
+
 async function createMaterial(env: WorkerEnv, input: MaterialInput) {
   const ip = await findOrCreateIp(env, input.ipName, input.sourcePlatform);
   const product = await findOrCreateProduct(env, input.productName, input.sourcePlatform);
@@ -520,6 +827,77 @@ async function createMaterial(env: WorkerEnv, input: MaterialInput) {
     product_id: product.id,
     is_primary: true
   });
+}
+
+async function createManualClipTask(env: WorkerEnv, input: ClipTaskInput) {
+  const payload = {
+    recordingTitle: input.recordingTitle,
+    ipName: input.ipName,
+    sourcePlatform: input.sourcePlatform
+  };
+  let taskId = crypto.randomUUID();
+  try {
+    const task = await insertRow<{ id: string }>(env, "clip_tasks", {
+      type: "clip.create",
+      dedupe_key: `manual:${taskId}`,
+      payload,
+      status: "queued"
+    });
+    taskId = task.id;
+  } catch {
+    // Older Supabase projects may not have clip_tasks yet; keep the action queueable.
+  }
+  await env.CLIP_TASK_QUEUE.send({
+    type: "clip.create",
+    taskId,
+    meta: {
+      title: input.recordingTitle,
+      ipName: input.ipName,
+      sourcePlatform: input.sourcePlatform
+    },
+    createdAt: new Date().toISOString()
+  } satisfies ClipTaskPayload);
+}
+
+async function updateManualClipTask(env: WorkerEnv, id: string, status: ClipTaskStatus) {
+  await patchRows(env, "clip_tasks", `id=eq.${id}`, {
+    status: toTaskDbStatus(status),
+    started_at: status === "processing" ? new Date().toISOString() : undefined,
+    finished_at: status === "completed" || status === "failed" ? new Date().toISOString() : undefined,
+    last_error: status === "failed" ? "模拟失败：等待重新处理。" : null,
+    updated_at: new Date().toISOString()
+  });
+}
+
+async function completeManualClipTask(env: WorkerEnv, id: string) {
+  const rows = await selectRows<{
+    id: string;
+    status: string;
+    payload: { recordingTitle?: string; ipName?: string; sourcePlatform?: string } | null;
+  }>(env, "clip_tasks", `select=id,status,payload&id=eq.${id}&limit=1`);
+  const task = first(rows);
+  if (!task) throw new ApiError("not_found", "Clip task not found", 404);
+  if (task.status === "succeeded") return;
+
+  const recordingTitle = task.payload?.recordingTitle ?? "模拟录屏";
+  const ipName = task.payload?.ipName ?? "晴姐穿搭";
+  const sourcePlatform = task.payload?.sourcePlatform ?? WECHAT_CHANNELS_LABEL;
+  const ip = await findOrCreateIp(env, ipName, sourcePlatform);
+
+  await Promise.all(
+    [1, 2, 3].map((index) =>
+      insertRow(env, "clip_assets", {
+        ip_account_id: ip.id,
+        title: `${recordingTitle} - 模拟切片 ${index}`,
+        status: "ready",
+        tags: ["模拟切片", index === 2 ? "强卖点" : "待标注"],
+        start_second: (index - 1) * 60,
+        end_second: index * 60
+      })
+    )
+  );
+
+  await updateManualClipTask(env, id, "completed");
 }
 
 function safeFileName(name: string) {
@@ -727,21 +1105,43 @@ async function claimMaterial(env: WorkerEnv, clipAssetId: string, distributorNam
     title: string;
     ip_account_id: string;
     ip_accounts: { platform: PlatformValue } | null;
-    clip_products: { product_id: string; products: { name: string } | null }[];
+    clip_products: {
+      product_id: string;
+      products: { name: string; is_active: boolean; commission_rate: number | null; affiliate_url: string | null } | null;
+    }[];
   }>(
     env,
     "clip_assets",
-    `select=id,title,ip_account_id,ip_accounts(platform),clip_products(product_id,products(name))&id=eq.${clipAssetId}&limit=1`
+    `select=id,title,ip_account_id,ip_accounts(platform),clip_products(product_id,products(name,is_active,commission_rate,affiliate_url))&id=eq.${clipAssetId}&limit=1`
   );
   const clip = first(clipRows);
   if (!clip) throw new Error("Clip asset not found");
 
   const platform = platformToLabel[clip.ip_accounts?.platform ?? "wechat_channels"];
-  const productId = clip.clip_products[0]?.product_id;
-  if (!productId) throw new Error("Clip asset has no product");
+  const productBinding = clip.clip_products[0];
+  const productId = productBinding?.product_id;
+  if (!productId || !isUsableProduct(productBinding.products)) {
+    throw new ApiError("invalid_product", "Clip asset must be bound to an active affiliate product before claiming", 422);
+  }
 
   const distributor = await findOrCreateDistributor(env, distributorName, "186****7108");
-  const social = await findOrCreateSocialAccount(env, distributor.id, "Demo account", platform);
+  const [authorizationRows, socialRows] = await Promise.all([
+    selectRows<{ id: string }>(
+      env,
+      "authorization_requests",
+      `select=id&distributor_id=eq.${distributor.id}&ip_account_id=eq.${clip.ip_account_id}&status=eq.approved&limit=1`
+    ),
+    selectRows<{ id: string }>(
+      env,
+      "social_accounts",
+      `select=id&distributor_id=eq.${distributor.id}&platform=eq.${toPlatformValue(platform)}&status=eq.approved&limit=1`
+    )
+  ]);
+  const social = first(socialRows);
+  if (!first(authorizationRows) || !social) {
+    throw new ApiError("forbidden", "Distributor must have an approved authorization and social account before claiming material", 403);
+  }
+
   const claim = await insertRow<{ id: string }>(env, "clip_claims", {
     distributor_id: distributor.id,
     clip_asset_id: clip.id,
@@ -769,10 +1169,27 @@ async function claimMaterial(env: WorkerEnv, clipAssetId: string, distributorNam
 }
 
 async function importPerformance(env: WorkerEnv, publishRecordId: string, gmv: number, commission: number) {
-  await patchRows(env, "publish_records", `id=eq.${publishRecordId}`, {
-    status: "verified",
-    verified_at: new Date().toISOString()
-  });
+  const rows = await selectRows<{
+    status: PublishStatus;
+    products: { is_active: boolean; commission_rate: number | null; affiliate_url: string | null } | null;
+  }>(
+    env,
+    "publish_records",
+    `select=status,products(is_active,commission_rate,affiliate_url)&id=eq.${publishRecordId}&limit=1`
+  );
+  const record = first(rows);
+  if (!record) throw new ApiError("not_found", "Publish record not found", 404);
+  if (!isUsableProduct(record.products)) {
+    await patchRows(env, "publish_records", `id=eq.${publishRecordId}`, {
+      status: "invalid",
+      verification_note: "精选联盟商品无效或已停用，本条不进入结算。"
+    });
+  } else if (record.status !== "invalid") {
+    await patchRows(env, "publish_records", `id=eq.${publishRecordId}`, {
+      status: "verified",
+      verified_at: new Date().toISOString()
+    });
+  }
   await insertRow(env, "performance_snapshots", {
     publish_record_id: publishRecordId,
     gmv,
@@ -784,19 +1201,21 @@ async function generateSettlement(env: WorkerEnv) {
   const records = await selectRows<{
     id: string;
     distributor_id: string;
+    products: { is_active: boolean; commission_rate: number | null; affiliate_url: string | null } | null;
     performance_snapshots: { commission_amount: number }[];
   }>(
     env,
     "publish_records",
-    "select=id,distributor_id,performance_snapshots(commission_amount)&status=eq.verified"
+    "select=id,distributor_id,products(is_active,commission_rate,affiliate_url),performance_snapshots(commission_amount)&status=eq.verified"
   );
 
-  const payable = records.reduce((sum, record) => {
+  const settleableRecords = records.filter((record) => isUsableProduct(record.products));
+  const payable = settleableRecords.reduce((sum, record) => {
     const latest = record.performance_snapshots.at(-1);
     return sum + Number(latest?.commission_amount ?? 0) * 0.5;
   }, 0);
 
-  const distributor = records[0]?.distributor_id ?? (await findOrCreateDistributor(env, "Monthly settlement")).id;
+  const distributor = settleableRecords[0]?.distributor_id ?? (await findOrCreateDistributor(env, "Monthly settlement")).id;
   await insertRow(env, "settlement_orders", {
     distributor_id: distributor,
     period: new Date().toISOString().slice(0, 7),
@@ -807,22 +1226,67 @@ async function generateSettlement(env: WorkerEnv) {
 
 async function listState(env: WorkerEnv) {
   async function readStateLists() {
-    const [authorizationRequests, materials, products, publishRecords, settlements, riskRecords] = await Promise.all([
+    const [
+      accountBindings,
+      authorizationRequests,
+      clipTasks,
+      materials,
+      products,
+      publishRecords,
+      settlements,
+      riskRecords,
+      distributorProfiles,
+      authorizationPools,
+      formalAuthorizations,
+      distributionTasks,
+      taskClaims,
+      walletTransactions,
+      notifications,
+      trainingState
+    ] = await Promise.all([
+      listAccountBindings(env),
       listAuthorizationRequests(env),
+      listClipTasks(env),
       listMaterials(env),
       listProducts(env),
       listPublishRecords(env),
       listSettlements(env),
-      listRiskRecords(env)
+      listRiskRecords(env),
+      safeList(() => listDistributors(env)),
+      safeList(() => listAuthorizationPools(env)),
+      safeList(() => listFormalAuthorizations(env)),
+      safeList(() => listDistributionTasks(env)),
+      safeList(() => listTaskClaims(env)),
+      safeList(() => listWalletTransactions(env)),
+      safeList(() => listNotifications(env)),
+      listTrainingState(env).catch(() => ({
+        trainingCourses: [],
+        examAttempts: [],
+        agreementSignatures: [],
+        creditScoreEvents: []
+      }))
     ]);
 
     return {
+      accountBindings: accountBindings.items,
+      agreementSignatures: trainingState.agreementSignatures,
+      authorizationPools: authorizationPools.items,
       authorizationRequests: authorizationRequests.items,
+      creditScoreEvents: trainingState.creditScoreEvents,
+      clipTasks: clipTasks.items,
+      distributionTasks: distributionTasks.items,
+      distributorProfiles: distributorProfiles.items,
+      examAttempts: trainingState.examAttempts,
+      formalAuthorizations: formalAuthorizations.items,
       materials: materials.items,
+      notifications: notifications.items,
       products: products.items,
       publishRecords: publishRecords.items,
       settlements: settlements.items,
-      riskRecords: riskRecords.items
+      riskRecords: riskRecords.items,
+      taskClaims: taskClaims.items,
+      trainingCourses: trainingState.trainingCourses,
+      walletTransactions: walletTransactions.items
     };
   }
 
@@ -830,6 +1294,10 @@ async function listState(env: WorkerEnv) {
 
   if (
     state.authorizationRequests.length === 0 &&
+    state.authorizationPools.length === 0 &&
+    state.accountBindings.length === 0 &&
+    state.clipTasks.length === 0 &&
+    state.distributionTasks.length === 0 &&
     state.materials.length === 0 &&
     state.products.length === 0 &&
     state.publishRecords.length === 0 &&
@@ -875,6 +1343,82 @@ async function listAuthorizationRequests(env: WorkerEnv, options = listOptions(n
     reason: row.application_note ?? ""
   }));
   return { items: authorizationRequests, meta: listMeta(authorizationRequests, options) };
+}
+
+async function listAccountBindings(env: WorkerEnv, options = listOptions(new URLSearchParams())) {
+  try {
+    const rows = await selectRows<{
+      id: string;
+      platform: PlatformValue;
+      account_name: string;
+      account_url: string | null;
+      followers: number | null;
+      category: string | null;
+      status: AccountBindingStatus | null;
+      binding_note: string | null;
+      created_at: string;
+      distributor_profiles: { display_name: string } | null;
+    }>(
+      env,
+      "social_accounts",
+      buildListQuery(
+        "select=id,platform,account_name,account_url,followers,category,status,binding_note,created_at,distributor_profiles(display_name)",
+        "order=created_at.desc",
+        options,
+        [
+          options.status ? filterParam("status", "eq", options.status) : undefined,
+          options.platform ? filterParam("platform", "eq", options.platform) : undefined,
+          searchQuery(["account_name", "category", "account_url"], options.q)
+        ]
+      )
+    );
+
+    const accountBindings = rows.map((row) => ({
+      id: row.id,
+      distributorName: row.distributor_profiles?.display_name ?? "Unknown distributor",
+      platform: platformToLabel[row.platform],
+      accountName: row.account_name,
+      homepageUrl: row.account_url ?? "https://example.com/social-account",
+      followers: Number(row.followers ?? 0),
+      category: row.category ?? "未分类",
+      status: row.status ?? "pending",
+      boundAt: new Date(row.created_at).toLocaleString("zh-CN", { hour12: false }),
+      note: row.binding_note ?? ""
+    }));
+    return { items: accountBindings, meta: listMeta(accountBindings, options) };
+  } catch {
+    const rows = await selectRows<{
+      id: string;
+      platform: PlatformValue;
+      account_name: string;
+      account_url: string | null;
+      created_at: string;
+      distributor_profiles: { display_name: string } | null;
+    }>(
+      env,
+      "social_accounts",
+      buildListQuery(
+        "select=id,platform,account_name,account_url,created_at,distributor_profiles(display_name)",
+        "order=created_at.desc",
+        options,
+        [options.platform ? filterParam("platform", "eq", options.platform) : undefined, searchQuery(["account_name", "account_url"], options.q)]
+      )
+    );
+
+    const accountBindings = rows.map((row) => ({
+      id: row.id,
+      distributorName: row.distributor_profiles?.display_name ?? "Unknown distributor",
+      platform: platformToLabel[row.platform],
+      accountName: row.account_name,
+      homepageUrl: row.account_url ?? "https://example.com/social-account",
+      followers: 0,
+      category: "未分类",
+      status: "pending" as AccountBindingStatus,
+      boundAt: new Date(row.created_at).toLocaleString("zh-CN", { hour12: false }),
+      note: "当前数据库尚未添加账号绑定扩展字段。"
+    }));
+    return { items: accountBindings, meta: listMeta(accountBindings, options) };
+  }
 }
 
 async function listMaterials(env: WorkerEnv, options = listOptions(new URLSearchParams())) {
@@ -1197,6 +1741,56 @@ async function listSettlements(env: WorkerEnv, options = listOptions(new URLSear
   return { items: settlements, meta: listMeta(settlements, options) };
 }
 
+async function listClipTasks(env: WorkerEnv, options = listOptions(new URLSearchParams())) {
+  let rows: {
+    id: string;
+    type: string;
+    payload: {
+      meta?: RecordingUploadMeta;
+      recordingTitle?: string;
+      ipName?: string;
+      sourcePlatform?: string;
+    } | null;
+    status: string;
+    attempts: number | null;
+    last_error: string | null;
+    queued_at: string;
+    finished_at: string | null;
+  }[] = [];
+  try {
+    rows = await selectRows<typeof rows[number]>(
+      env,
+      "clip_tasks",
+      buildListQuery(
+        "select=id,type,payload,status,attempts,last_error,queued_at,finished_at",
+        "order=queued_at.desc",
+        options,
+        [options.status ? filterParam("status", "eq", toTaskDbStatus(toTaskUiStatus(options.status))) : undefined]
+      )
+    );
+  } catch {
+    return { items: [], meta: listMeta([], options) };
+  }
+
+  const tasks = rows.map((row) => {
+    const meta = row.payload?.meta;
+    const status = toTaskUiStatus(row.status);
+    return {
+      id: row.id,
+      recordingTitle: row.payload?.recordingTitle ?? meta?.title ?? "待处理录屏",
+      ipName: row.payload?.ipName ?? meta?.ipName ?? "未知 IP",
+      sourcePlatform: toPlatformLabel(row.payload?.sourcePlatform ?? meta?.sourcePlatform),
+      status,
+      progress: status === "completed" ? 100 : status === "processing" ? 60 : status === "failed" ? 35 : 0,
+      outputCount: status === "completed" ? 3 : 0,
+      errorMessage: row.last_error ?? "",
+      createdAt: new Date(row.queued_at).toLocaleString("zh-CN", { hour12: false })
+    };
+  });
+
+  return { items: tasks, meta: listMeta(tasks, options) };
+}
+
 async function listRiskRecords(env: WorkerEnv, options = listOptions(new URLSearchParams())) {
   const rows = await selectRows<{
     id: string;
@@ -1242,6 +1836,1018 @@ async function createRiskRecord(env: WorkerEnv, input: RiskRecordInput) {
     status: "open",
     handling_note: input.issue
   });
+}
+
+async function listDistributors(env: WorkerEnv, options = listOptions(new URLSearchParams())) {
+  let rows = await safeRows(() =>
+    selectRows<{
+      id: string;
+      display_name: string;
+      phone: string | null;
+      wechat_id: string | null;
+      onboarding_status: string | null;
+      credit_score: number | null;
+      exam_score: number | null;
+      agreement_signed: boolean | null;
+      created_at: string;
+    }>(
+      env,
+      "distributor_profiles",
+      buildListQuery(
+        "select=id,display_name,phone,wechat_id,onboarding_status,credit_score,exam_score,agreement_signed,created_at",
+        "order=created_at.desc",
+        options,
+        [searchQuery(["display_name", "phone", "wechat_id"], options.q)]
+      )
+    )
+  );
+
+  if (!rows.length) {
+    rows = await safeRows(() =>
+      selectRows<{
+        id: string;
+        display_name: string;
+        phone: string | null;
+        wechat_id: string | null;
+        onboarding_status: string | null;
+        credit_score: number | null;
+        exam_score: number | null;
+        agreement_signed: boolean | null;
+        created_at: string;
+      }>(
+        env,
+        "distributor_profiles",
+        buildListQuery("select=id,display_name,phone,created_at", "order=created_at.desc", options, [
+          searchQuery(["display_name", "phone"], options.q)
+        ])
+      )
+    );
+  }
+
+  const distributorIds = rows.map((row) => row.id);
+  const [accounts, authorizations, violations, walletTransactions] = distributorIds.length
+    ? await Promise.all([
+        safeRows(() =>
+          selectRows<{ distributor_id: string }>(env, "social_accounts", `select=distributor_id&${inList("distributor_id", distributorIds)}`)
+        ),
+        safeRows(() =>
+          selectRows<{ distributor_id: string }>(
+            env,
+            "authorizations",
+            `select=distributor_id&${inList("distributor_id", distributorIds)}&status=eq.approved`
+          )
+        ),
+        safeRows(() =>
+          selectRows<{ distributor_id: string | null }>(
+            env,
+            "violation_records",
+            `select=distributor_id&${inList("distributor_id", distributorIds)}`
+          )
+        ),
+        safeRows(() =>
+          selectRows<{ distributor_id: string; amount: number | string; status: WalletTransactionStatus }>(
+            env,
+            "wallet_transactions",
+            `select=distributor_id,amount,status&${inList("distributor_id", distributorIds)}`
+          )
+        )
+      ])
+    : [[], [], [], []];
+
+  const accountCounts = countBy(accounts, (item) => item.distributor_id);
+  const authorizationCounts = countBy(authorizations, (item) => item.distributor_id);
+  const violationCounts = countBy(violations, (item) => item.distributor_id);
+  const payableByDistributor = new Map<string, number>();
+  walletTransactions.forEach((transaction) => {
+    if (transaction.status !== "available") return;
+    payableByDistributor.set(
+      transaction.distributor_id,
+      (payableByDistributor.get(transaction.distributor_id) ?? 0) + Number(transaction.amount ?? 0)
+    );
+  });
+
+  const items = rows.map((row) => ({
+    id: row.id,
+    displayName: row.display_name,
+    phone: row.phone ?? "",
+    wechatId: row.wechat_id ?? "",
+    onboardingStatus: asOnboardingStatus(row.onboarding_status),
+    creditScore: Number(row.credit_score ?? 100),
+    examScore: Number(row.exam_score ?? 0),
+    agreementSigned: Boolean(row.agreement_signed),
+    accountCount: accountCounts.get(row.id) ?? 0,
+    authorizationCount: authorizationCounts.get(row.id) ?? 0,
+    violationCount: violationCounts.get(row.id) ?? 0,
+    payableCommission: payableByDistributor.get(row.id) ?? 0,
+    createdAt: dateOnly(row.created_at)
+  }));
+
+  return { items, meta: listMeta(items, options) };
+}
+
+async function listAuthorizationPools(env: WorkerEnv, options = listOptions(new URLSearchParams())) {
+  const rows = await safeRows(() =>
+    selectRows<{
+      id: string;
+      status: AuthorizationPoolStatus;
+      total_quota: number;
+      used_quota: number;
+      min_credit_score: number;
+      default_share_rate: number | string;
+      daily_claim_limit: number;
+      requirement: string | null;
+      ip_accounts: { name: string; platform: PlatformValue } | null;
+    }>(
+      env,
+      "authorization_pools",
+      buildListQuery(
+        "select=id,status,total_quota,used_quota,min_credit_score,default_share_rate,daily_claim_limit,requirement,ip_accounts(name,platform)",
+        "order=created_at.desc",
+        options,
+        [options.status ? filterParam("status", "eq", options.status) : undefined]
+      )
+    )
+  );
+
+  const items = rows.map((row) => ({
+    id: row.id,
+    ipName: row.ip_accounts?.name ?? "Unknown IP",
+    platform: platformToLabel[row.ip_accounts?.platform ?? "douyin"],
+    status: row.status,
+    totalQuota: Number(row.total_quota ?? 0),
+    usedQuota: Number(row.used_quota ?? 0),
+    minCreditScore: Number(row.min_credit_score ?? 80),
+    defaultShareRate: Number(row.default_share_rate ?? 30),
+    dailyClaimLimit: Number(row.daily_claim_limit ?? 10),
+    requirement: row.requirement ?? ""
+  }));
+  return { items, meta: listMeta(items, options) };
+}
+
+async function listFormalAuthorizations(env: WorkerEnv, options = listOptions(new URLSearchParams())) {
+  const rows = await safeRows(() =>
+    selectRows<{
+      id: string;
+      status: AuthorizationStatus;
+      share_rate: number | string;
+      daily_claim_limit: number | null;
+      starts_at: string;
+      expires_at: string | null;
+      paused_reason: string | null;
+      distributor_profiles: { display_name: string } | null;
+      social_accounts: { account_name: string; platform: PlatformValue } | null;
+      ip_accounts: { name: string; platform: PlatformValue } | null;
+      agreement_signatures: { agreement_templates: { version: string } | null } | null;
+    }>(
+      env,
+      "authorizations",
+      buildListQuery(
+        "select=id,status,share_rate,daily_claim_limit,starts_at,expires_at,paused_reason,distributor_profiles(display_name),social_accounts(account_name,platform),ip_accounts(name,platform),agreement_signatures(agreement_templates(version))",
+        "order=created_at.desc",
+        options,
+        [options.status ? filterParam("status", "eq", options.status) : undefined]
+      )
+    )
+  );
+
+  const items = rows.map((row) => ({
+    id: row.id,
+    distributorName: row.distributor_profiles?.display_name ?? "Unknown distributor",
+    socialAccount: row.social_accounts?.account_name ?? "Unknown account",
+    ipName: row.ip_accounts?.name ?? "Unknown IP",
+    platform: platformToLabel[row.social_accounts?.platform ?? row.ip_accounts?.platform ?? "douyin"],
+    status: row.status,
+    shareRate: Number(row.share_rate ?? 30),
+    dailyClaimLimit: Number(row.daily_claim_limit ?? 10),
+    startsAt: dateOnly(row.starts_at),
+    expiresAt: dateOnly(row.expires_at),
+    agreementVersion: row.agreement_signatures?.agreement_templates?.version ?? DEFAULT_AGREEMENT_VERSION,
+    pausedReason: row.paused_reason ?? undefined
+  }));
+  return { items, meta: listMeta(items, options) };
+}
+
+async function listTrainingState(env: WorkerEnv, options = listOptions(new URLSearchParams())) {
+  const [courses, examAttempts, agreementSignatures, creditScoreEvents] = await Promise.all([
+    safeRows(() =>
+      selectRows<{
+        id: string;
+        title: string;
+        lesson_count: number;
+        estimated_minutes: number;
+        is_required: boolean;
+      }>(
+        env,
+        "training_courses",
+        buildListQuery("select=id,title,lesson_count,estimated_minutes,is_required", "order=created_at.desc", options, [])
+      )
+    ),
+    safeRows(() =>
+      selectRows<{
+        id: string;
+        score: number;
+        passed: boolean;
+        attempted_at: string;
+        distributor_profiles: { display_name: string } | null;
+      }>(
+        env,
+        "exam_attempts",
+        buildListQuery(
+          "select=id,score,passed,attempted_at,distributor_profiles(display_name)",
+          "order=attempted_at.desc",
+          options,
+          []
+        )
+      )
+    ),
+    safeRows(() =>
+      selectRows<{
+        id: string;
+        signed_at: string;
+        distributor_profiles: { display_name: string } | null;
+        agreement_templates: { name: string; version: string } | null;
+      }>(
+        env,
+        "agreement_signatures",
+        buildListQuery(
+          "select=id,signed_at,distributor_profiles(display_name),agreement_templates(name,version)",
+          "order=signed_at.desc",
+          options,
+          []
+        )
+      )
+    ),
+    safeRows(() =>
+      selectRows<{
+        id: string;
+        delta: number;
+        reason: string;
+        created_at: string;
+        distributor_profiles: { display_name: string } | null;
+      }>(
+        env,
+        "credit_score_events",
+        buildListQuery("select=id,delta,reason,created_at,distributor_profiles(display_name)", "order=created_at.desc", options, [])
+      )
+    )
+  ]);
+
+  return {
+    trainingCourses: courses.map((row) => ({
+      id: row.id,
+      title: row.title,
+      lessonCount: Number(row.lesson_count ?? 0),
+      estimatedMinutes: Number(row.estimated_minutes ?? 0),
+      isRequired: Boolean(row.is_required)
+    })),
+    examAttempts: examAttempts.map((row) => ({
+      id: row.id,
+      distributorName: row.distributor_profiles?.display_name ?? "Unknown distributor",
+      score: Number(row.score ?? 0),
+      passed: Boolean(row.passed),
+      attemptedAt: formatDateTime(row.attempted_at)
+    })),
+    agreementSignatures: agreementSignatures.map((row) => ({
+      id: row.id,
+      distributorName: row.distributor_profiles?.display_name ?? "Unknown distributor",
+      templateName: row.agreement_templates?.name ?? DEFAULT_AGREEMENT_NAME,
+      version: row.agreement_templates?.version ?? DEFAULT_AGREEMENT_VERSION,
+      signedAt: formatDateTime(row.signed_at)
+    })),
+    creditScoreEvents: creditScoreEvents.map((row) => ({
+      id: row.id,
+      distributorName: row.distributor_profiles?.display_name ?? "Unknown distributor",
+      delta: Number(row.delta ?? 0),
+      reason: row.reason,
+      createdAt: formatDateTime(row.created_at)
+    }))
+  };
+}
+
+async function listDistributionTasks(env: WorkerEnv, options = listOptions(new URLSearchParams())) {
+  const rows = await safeRows(() =>
+    selectRows<{
+      id: string;
+      title: string;
+      platform: PlatformValue;
+      status: DistributionTaskStatus;
+      start_at: string;
+      end_at: string | null;
+      reward_rule: string | null;
+      claim_limit: number;
+      claimed_count: number;
+      published_count: number;
+      requirement: string | null;
+      ip_accounts: { name: string } | null;
+      products: { name: string } | null;
+      distribution_task_materials: { clip_asset_id: string }[];
+    }>(
+      env,
+      "distribution_tasks",
+      buildListQuery(
+        "select=id,title,platform,status,start_at,end_at,reward_rule,claim_limit,claimed_count,published_count,requirement,ip_accounts(name),products(name),distribution_task_materials(clip_asset_id)",
+        "order=created_at.desc",
+        options,
+        [
+          options.status ? filterParam("status", "eq", options.status) : undefined,
+          options.platform ? filterParam("platform", "eq", options.platform) : undefined,
+          searchQuery(["title", "reward_rule", "requirement"], options.q)
+        ]
+      )
+    )
+  );
+
+  const items = rows.map((row) => ({
+    id: row.id,
+    title: row.title,
+    ipName: row.ip_accounts?.name ?? "Unknown IP",
+    platform: platformToLabel[row.platform],
+    materialIds: row.distribution_task_materials?.map((item) => item.clip_asset_id) ?? [],
+    productName: row.products?.name ?? "Unknown product",
+    status: row.status,
+    startAt: dateOnly(row.start_at),
+    endAt: row.end_at ? dateOnly(row.end_at) : "",
+    rewardRule: row.reward_rule ?? "",
+    claimLimit: Number(row.claim_limit ?? 0),
+    claimedCount: Number(row.claimed_count ?? 0),
+    publishedCount: Number(row.published_count ?? 0),
+    requirement: row.requirement ?? ""
+  }));
+  return { items, meta: listMeta(items, options) };
+}
+
+async function listTaskClaims(env: WorkerEnv, options = listOptions(new URLSearchParams())) {
+  const rows = await safeRows(() =>
+    selectRows<{
+      id: string;
+      distribution_task_id: string;
+      status: TaskClaimStatus;
+      claim_token: string;
+      submitted_url: string | null;
+      claimed_at: string;
+      distributor_profiles: { display_name: string } | null;
+      social_accounts: { account_name: string; platform: PlatformValue } | null;
+      clip_assets: { title: string } | null;
+      products: { name: string } | null;
+      download_tokens: { expires_at: string }[];
+    }>(
+      env,
+      "task_claims",
+      buildListQuery(
+        "select=id,distribution_task_id,status,claim_token,submitted_url,claimed_at,distributor_profiles(display_name),social_accounts(account_name,platform),clip_assets(title),products(name),download_tokens(expires_at)",
+        "order=claimed_at.desc",
+        options,
+        [options.status ? filterParam("status", "eq", options.status) : undefined]
+      )
+    )
+  );
+
+  const items = rows.map((row) => ({
+    id: row.id,
+    taskId: row.distribution_task_id,
+    distributorName: row.distributor_profiles?.display_name ?? "Unknown distributor",
+    socialAccount: row.social_accounts?.account_name ?? "Unknown account",
+    materialTitle: row.clip_assets?.title ?? "Unknown material",
+    productName: row.products?.name ?? "Unknown product",
+    platform: platformToLabel[row.social_accounts?.platform ?? "douyin"],
+    status: row.status,
+    claimToken: row.claim_token,
+    downloadExpiresAt: formatDateTime(row.download_tokens?.[0]?.expires_at),
+    claimedAt: formatDateTime(row.claimed_at),
+    submittedUrl: row.submitted_url ?? undefined
+  }));
+  return { items, meta: listMeta(items, options) };
+}
+
+async function listWalletTransactions(env: WorkerEnv, options = listOptions(new URLSearchParams())) {
+  const rows = await safeRows(() =>
+    selectRows<{
+      id: string;
+      type: WalletTransactionType;
+      amount: number | string;
+      status: WalletTransactionStatus;
+      source: string;
+      note: string | null;
+      created_at: string;
+      distributor_profiles: { display_name: string } | null;
+    }>(
+      env,
+      "wallet_transactions",
+      buildListQuery(
+        "select=id,type,amount,status,source,note,created_at,distributor_profiles(display_name)",
+        "order=created_at.desc",
+        options,
+        [options.status ? filterParam("status", "eq", options.status) : undefined]
+      )
+    )
+  );
+
+  const items = rows.map((row) => ({
+    id: row.id,
+    distributorName: row.distributor_profiles?.display_name ?? "Unknown distributor",
+    type: row.type,
+    amount: Number(row.amount ?? 0),
+    status: row.status,
+    source: row.source,
+    note: row.note ?? "",
+    createdAt: formatDateTime(row.created_at)
+  }));
+  return { items, meta: listMeta(items, options) };
+}
+
+async function listNotifications(env: WorkerEnv, options = listOptions(new URLSearchParams())) {
+  const rows = await safeRows(() =>
+    selectRows<{
+      id: string;
+      audience: "all" | "admin" | "partner";
+      title: string;
+      content: string;
+      created_at: string;
+    }>(
+      env,
+      "notifications",
+      buildListQuery("select=id,audience,title,content,created_at", "order=created_at.desc", options, [])
+    )
+  );
+
+  const items = rows.map((row) => ({
+    id: row.id,
+    audience: row.audience,
+    title: row.title,
+    content: row.content,
+    createdAt: formatDateTime(row.created_at),
+    isRead: false
+  }));
+  return { items, meta: listMeta(items, options) };
+}
+
+async function partnerWalletResponse(env: WorkerEnv, options = listOptions(new URLSearchParams())) {
+  const { items, meta } = await listWalletTransactions(env, options);
+  const wallet = items.reduce(
+    (summary, transaction) => {
+      if (transaction.status === "available") summary.availableAmount += transaction.amount;
+      if (transaction.status === "frozen") summary.frozenAmount += Math.abs(transaction.amount);
+      if (transaction.status === "pending") summary.pendingAmount += transaction.amount;
+      if (transaction.status === "paid") summary.paidAmount += transaction.amount;
+      return summary;
+    },
+    { availableAmount: 0, frozenAmount: 0, pendingAmount: 0, paidAmount: 0 }
+  );
+
+  return { wallet, walletTransactions: items, meta };
+}
+
+async function getMe(env: WorkerEnv) {
+  const session = mockSession();
+  const rows = await safeRows(() =>
+    selectRows<{
+      id: string;
+      display_name: string;
+      onboarding_status: string | null;
+      credit_score: number | null;
+    }>(
+      env,
+      "distributor_profiles",
+      `select=id,display_name,onboarding_status,credit_score&${eq("display_name", DEFAULT_DISTRIBUTOR_NAME)}&limit=1`
+    )
+  );
+  const profile = first(rows);
+
+  return {
+    ...session,
+    distributor: profile
+      ? {
+          id: profile.id,
+          displayName: profile.display_name,
+          onboardingStatus: asOnboardingStatus(profile.onboarding_status),
+          creditScore: Number(profile.credit_score ?? 100)
+        }
+      : session.distributor,
+    providers: {
+      authProvider: "mock",
+      videoProvider: "mock",
+      platformDataProvider: "mock",
+      paymentProvider: "manual",
+      supabase: Boolean(env.NEXT_PUBLIC_SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY)
+    }
+  };
+}
+
+async function upsertPartnerProfile(env: WorkerEnv, input: z.infer<typeof partnerProfileSchema>) {
+  const displayName = input.displayName ?? input.distributorName ?? DEFAULT_DISTRIBUTOR_NAME;
+  const distributor = await findOrCreateDistributor(env, displayName, input.phone || "Pending binding");
+  await patchRows(env, "distributor_profiles", `id=eq.${distributor.id}`, {
+    display_name: displayName,
+    phone: input.phone,
+    wechat_id: input.wechatId,
+    onboarding_status: input.onboardingStatus ?? "account_pending",
+    updated_at: new Date().toISOString()
+  });
+}
+
+async function recordPartnerExamAttempt(env: WorkerEnv, input: z.infer<typeof examAttemptSchema>) {
+  const distributor = await findOrCreateDistributor(env, input.distributorName ?? DEFAULT_DISTRIBUTOR_NAME, "186****7108");
+  const passed = input.score >= 80;
+  await insertRow(env, "exam_attempts", {
+    distributor_id: distributor.id,
+    score: input.score,
+    passed,
+    answers: input.answers ?? {}
+  });
+  await patchRows(env, "distributor_profiles", `id=eq.${distributor.id}`, {
+    exam_score: input.score,
+    onboarding_status: passed ? "agreement_pending" : "exam_failed",
+    updated_at: new Date().toISOString()
+  });
+}
+
+async function findOrCreateAgreementTemplate(env: WorkerEnv, name: string, version: string) {
+  const existing = await selectRows<{ id: string }>(
+    env,
+    "agreement_templates",
+    `select=id&${eq("name", name)}&${eq("version", version)}&limit=1`
+  );
+  if (first(existing)) return first(existing);
+
+  return insertRow<{ id: string }>(env, "agreement_templates", {
+    name,
+    version,
+    body: `${name} ${version}`,
+    is_active: true
+  });
+}
+
+async function signPartnerAgreement(env: WorkerEnv, input: z.infer<typeof agreementSignSchema>, request: Request) {
+  const distributor = await findOrCreateDistributor(env, input.distributorName ?? DEFAULT_DISTRIBUTOR_NAME, "186****7108");
+  const template = await findOrCreateAgreementTemplate(
+    env,
+    input.templateName ?? DEFAULT_AGREEMENT_NAME,
+    input.version ?? DEFAULT_AGREEMENT_VERSION
+  );
+  await insertRow(env, "agreement_signatures", {
+    distributor_id: distributor.id,
+    template_id: template.id,
+    signer_ip: request.headers.get("cf-connecting-ip") ?? "",
+    signer_user_agent: request.headers.get("user-agent") ?? ""
+  });
+  await patchRows(env, "distributor_profiles", `id=eq.${distributor.id}`, {
+    agreement_signed: true,
+    onboarding_status: "ready_for_authorization",
+    updated_at: new Date().toISOString()
+  });
+}
+
+async function createAuthorizationPool(env: WorkerEnv, input: z.infer<typeof authorizationPoolSchema>) {
+  const ip = await findOrCreateIp(env, input.ipName, input.platform);
+  await insertRow(env, "authorization_pools", {
+    ip_account_id: ip.id,
+    status: "open",
+    total_quota: input.totalQuota,
+    used_quota: 0,
+    min_credit_score: input.minCreditScore,
+    default_share_rate: input.defaultShareRate,
+    daily_claim_limit: input.dailyClaimLimit,
+    requirement: input.requirement
+  });
+}
+
+async function updateAuthorizationPool(env: WorkerEnv, id: string, input: z.infer<typeof authorizationPoolPatchSchema>) {
+  await patchRows(env, "authorization_pools", `id=eq.${id}`, { status: input.status });
+}
+
+async function reviewAuthorizationRequest(env: WorkerEnv, requestId: string, input: z.infer<typeof authorizationReviewSchema>) {
+  const rows = await selectRows<{
+    id: string;
+    distributor_id: string;
+    ip_account_id: string;
+    social_account_id: string | null;
+  }>(env, "authorization_requests", `select=id,distributor_id,ip_account_id,social_account_id&id=eq.${requestId}&limit=1`);
+  const request = first(rows);
+  if (!request) throw new ApiError("not_found", "Authorization request not found", 404);
+
+  await patchRows(env, "authorization_requests", `id=eq.${requestId}`, {
+    status: input.status,
+    review_note: input.reviewNote ?? "",
+    reviewed_at: new Date().toISOString()
+  });
+
+  if (input.status !== "approved") return;
+
+  const pools = await selectRows<{
+    id: string;
+    status: AuthorizationPoolStatus;
+    total_quota: number;
+    used_quota: number;
+    default_share_rate: number | string;
+    daily_claim_limit: number;
+  }>(env, "authorization_pools", `select=id,status,total_quota,used_quota,default_share_rate,daily_claim_limit&ip_account_id=eq.${request.ip_account_id}&limit=1`);
+  const pool = first(pools);
+  if (pool && (pool.status !== "open" || (pool.total_quota > 0 && pool.used_quota >= pool.total_quota))) {
+    throw new ApiError("authorization_pool_unavailable", "Authorization pool is paused or full", 409);
+  }
+
+  const existing = await selectRows<{ id: string }>(
+    env,
+    "authorizations",
+    `select=id&distributor_id=eq.${request.distributor_id}&ip_account_id=eq.${request.ip_account_id}&limit=1`
+  );
+  let authorizationId = first(existing)?.id;
+  if (authorizationId) {
+    await patchRows(env, "authorizations", `id=eq.${authorizationId}`, {
+      status: "approved",
+      social_account_id: request.social_account_id,
+      authorization_pool_id: pool?.id,
+      daily_claim_limit: pool?.daily_claim_limit ?? 10,
+      share_rate: pool?.default_share_rate ?? 30,
+      paused_reason: null
+    });
+  } else {
+    const authorization = await insertRow<{ id: string }>(env, "authorizations", {
+      distributor_id: request.distributor_id,
+      ip_account_id: request.ip_account_id,
+      social_account_id: request.social_account_id,
+      authorization_pool_id: pool?.id,
+      status: "approved",
+      share_rate: pool?.default_share_rate ?? 30,
+      daily_claim_limit: pool?.daily_claim_limit ?? 10,
+      starts_at: new Date().toISOString(),
+      expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString()
+    });
+    authorizationId = authorization.id;
+    if (pool) {
+      await patchRows(env, "authorization_pools", `id=eq.${pool.id}`, { used_quota: pool.used_quota + 1 });
+    }
+  }
+
+  if (authorizationId) {
+    await insertRow(env, "authorization_events", {
+      authorization_id: authorizationId,
+      event_type: "approved",
+      note: input.reviewNote ?? "Approved from authorization request"
+    }).catch(() => undefined);
+  }
+}
+
+async function createDistributionTask(env: WorkerEnv, input: z.infer<typeof distributionTaskSchema>) {
+  const ip = await findOrCreateIp(env, input.ipName, input.platform);
+  const product = await findOrCreateProduct(env, input.productName, input.platform);
+  const task = await insertRow<{ id: string }>(env, "distribution_tasks", {
+    title: input.title,
+    ip_account_id: ip.id,
+    platform: toPlatformValue(input.platform),
+    product_id: product.id,
+    status: "open",
+    end_at: input.endAt ? new Date(input.endAt).toISOString() : null,
+    reward_rule: input.rewardRule,
+    claim_limit: input.claimLimit,
+    requirement: input.requirement
+  });
+
+  await Promise.all(
+    input.materialIds
+      .filter((id) => isUuid(id))
+      .map((clipAssetId) =>
+        insertRow(env, "distribution_task_materials", {
+          distribution_task_id: task.id,
+          clip_asset_id: clipAssetId
+        }).catch(() => undefined)
+      )
+  );
+}
+
+async function updateDistributionTask(env: WorkerEnv, id: string, input: z.infer<typeof distributionTaskPatchSchema>) {
+  await patchRows(env, "distribution_tasks", `id=eq.${id}`, { status: input.status });
+}
+
+async function claimDistributionTask(env: WorkerEnv, taskId: string, input: z.infer<typeof taskClaimSchema>, request: Request) {
+  const taskRows = await selectRows<{
+    id: string;
+    title: string;
+    ip_account_id: string;
+    platform: PlatformValue;
+    product_id: string;
+    status: DistributionTaskStatus;
+    claim_limit: number;
+    claimed_count: number;
+  }>(
+    env,
+    "distribution_tasks",
+    `select=id,title,ip_account_id,platform,product_id,status,claim_limit,claimed_count&id=eq.${taskId}&limit=1`
+  );
+  const task = first(taskRows);
+  if (!task) throw new ApiError("not_found", "Distribution task not found", 404);
+  if (task.status !== "open") throw new ApiError("task_closed", "Distribution task is not open", 409);
+  if (task.claim_limit > 0 && task.claimed_count >= task.claim_limit) {
+    throw new ApiError("task_full", "Distribution task claim limit has been reached", 409);
+  }
+
+  const product = first(
+    await selectRows<{
+      id: string;
+      name: string;
+      is_active: boolean;
+      commission_rate: number | null;
+      affiliate_url: string | null;
+    }>(env, "products", `select=id,name,is_active,commission_rate,affiliate_url&id=eq.${task.product_id}&limit=1`)
+  );
+  if (!isUsableProduct(product)) throw new ApiError("product_disabled", "Product is disabled or invalid", 422);
+
+  const distributor = await findOrCreateDistributor(env, input.distributorName ?? DEFAULT_DISTRIBUTOR_NAME, "186****7108");
+  const profile = first(
+    await selectRows<{
+      id: string;
+      credit_score: number | null;
+      onboarding_status: string | null;
+    }>(
+      env,
+      "distributor_profiles",
+      `select=id,credit_score,onboarding_status&id=eq.${distributor.id}&limit=1`
+    )
+  );
+  const creditScore = Number(profile?.credit_score ?? 100);
+  const onboardingStatus = asOnboardingStatus(profile?.onboarding_status);
+  if (creditScore < 60) throw new ApiError("credit_score_low", "Credit score is lower than the claiming threshold", 403);
+  if (onboardingStatus !== "ready_for_authorization") {
+    throw new ApiError("onboarding_incomplete", "Distributor onboarding is not complete", 403);
+  }
+
+  const authorization = first(
+    await selectRows<{
+      id: string;
+      expires_at: string | null;
+      daily_claim_limit: number | null;
+    }>(
+      env,
+      "authorizations",
+      `select=id,expires_at,daily_claim_limit&distributor_id=eq.${distributor.id}&ip_account_id=eq.${task.ip_account_id}&status=eq.approved&limit=1`
+    )
+  );
+  if (!authorization) throw new ApiError("authorization_missing", "Distributor has no active authorization for this IP", 403);
+  if (authorization.expires_at && new Date(authorization.expires_at).getTime() < Date.now()) {
+    throw new ApiError("authorization_expired", "Authorization has expired", 403);
+  }
+
+  const social = first(
+    await selectRows<{ id: string; account_name: string }>(
+      env,
+      "social_accounts",
+      `select=id,account_name&distributor_id=eq.${distributor.id}&platform=eq.${task.platform}&status=eq.approved&limit=1`
+    )
+  );
+  if (!social) throw new ApiError("account_not_approved", "Distributor has no approved social account for this platform", 403);
+
+  const today = new Date().toISOString().slice(0, 10);
+  const todayClaims = await safeRows(() =>
+    selectRows<{ id: string }>(
+      env,
+      "task_claims",
+      `select=id&distributor_id=eq.${distributor.id}&claimed_at=gte.${encodeURIComponent(today)}`
+    )
+  );
+  const dailyLimit = Number(authorization.daily_claim_limit ?? 10);
+  if (dailyLimit > 0 && todayClaims.length >= dailyLimit) {
+    throw new ApiError("daily_claim_limit_reached", "Daily claim limit has been reached", 409);
+  }
+
+  const materialLinks = await selectRows<{ clip_asset_id: string }>(
+    env,
+    "distribution_task_materials",
+    `select=clip_asset_id&distribution_task_id=eq.${task.id}`
+  );
+  if (!materialLinks.length) throw new ApiError("task_material_missing", "Distribution task has no material", 422);
+  const clips = await selectRows<{ id: string; title: string; status: MaterialStatus }>(
+    env,
+    "clip_assets",
+    `select=id,title,status&${inList(
+      "id",
+      materialLinks.map((item) => item.clip_asset_id)
+    )}`
+  );
+  const clip = clips.find((item) => item.status === "published" || item.status === "ready");
+  if (!clip) throw new ApiError("material_not_publishable", "No ready material is available for this task", 422);
+
+  const claimToken = `CP-${crypto.randomUUID()}`;
+  const taskClaim = await insertRow<{ id: string }>(env, "task_claims", {
+    distribution_task_id: task.id,
+    distributor_id: distributor.id,
+    authorization_id: authorization.id,
+    social_account_id: social.id,
+    clip_asset_id: clip.id,
+    product_id: task.product_id,
+    status: "downloaded",
+    claim_token: claimToken
+  });
+  const expiresAt = nextExpiry(30);
+  await insertRow(env, "download_tokens", {
+    task_claim_id: taskClaim.id,
+    token: crypto.randomUUID(),
+    expires_at: expiresAt,
+    requester_ip: request.headers.get("cf-connecting-ip") ?? "",
+    requester_user_agent: request.headers.get("user-agent") ?? ""
+  });
+
+  const legacyClaim = await insertRow<{ id: string }>(env, "clip_claims", {
+    distributor_id: distributor.id,
+    clip_asset_id: clip.id,
+    product_id: task.product_id,
+    social_account_id: social.id,
+    planned_platform: task.platform
+  });
+  await insertRow(env, "clip_downloads", {
+    claim_id: legacyClaim.id,
+    distributor_id: distributor.id,
+    clip_asset_id: clip.id,
+    download_version: "watermarked"
+  });
+  await insertRow(env, "publish_records", {
+    claim_id: legacyClaim.id,
+    distributor_id: distributor.id,
+    clip_asset_id: clip.id,
+    product_id: task.product_id,
+    platform: task.platform,
+    publish_url: "pending",
+    status: "downloaded"
+  });
+  await patchRows(env, "distribution_tasks", `id=eq.${task.id}`, {
+    claimed_count: task.claimed_count + 1
+  });
+}
+
+async function createClaimDownloadUrl(env: WorkerEnv, claimId: string, request: Request) {
+  const claim = first(await selectRows<{ id: string }>(env, "task_claims", `select=id&id=eq.${claimId}&limit=1`));
+  if (!claim) throw new ApiError("not_found", "Task claim not found", 404);
+  const token = await insertRow<{ token: string; expires_at: string }>(env, "download_tokens", {
+    task_claim_id: claim.id,
+    token: crypto.randomUUID(),
+    expires_at: nextExpiry(30),
+    requester_ip: request.headers.get("cf-connecting-ip") ?? "",
+    requester_user_agent: request.headers.get("user-agent") ?? ""
+  });
+  await patchRows(env, "task_claims", `id=eq.${claim.id}`, {
+    status: "downloaded",
+    updated_at: new Date().toISOString()
+  });
+  return {
+    token: token.token,
+    expiresAt: token.expires_at,
+    downloadUrl: `/claims/${claim.id}/download?token=${encodeURIComponent(token.token)}`
+  };
+}
+
+async function submitTaskClaim(env: WorkerEnv, claimId: string, input: z.infer<typeof taskClaimSubmitSchema>) {
+  const claim = first(
+    await selectRows<{
+      id: string;
+      distribution_task_id: string;
+      distributor_id: string;
+      clip_asset_id: string;
+      product_id: string;
+    }>(
+      env,
+      "task_claims",
+      `select=id,distribution_task_id,distributor_id,clip_asset_id,product_id&id=eq.${claimId}&limit=1`
+    )
+  );
+  if (!claim) throw new ApiError("not_found", "Task claim not found", 404);
+
+  await patchRows(env, "task_claims", `id=eq.${claim.id}`, {
+    status: "submitted",
+    submitted_url: input.publishUrl,
+    updated_at: new Date().toISOString()
+  });
+  await patchRows(
+    env,
+    "publish_records",
+    `distributor_id=eq.${claim.distributor_id}&clip_asset_id=eq.${claim.clip_asset_id}&product_id=eq.${claim.product_id}&status=eq.downloaded`,
+    {
+      status: "submitted",
+      submitted_at: new Date().toISOString(),
+      publish_url: input.publishUrl,
+      verification_note: "Submitted from distribution task claim"
+    }
+  );
+  const taskRows = await selectRows<{ published_count: number }>(
+    env,
+    "distribution_tasks",
+    `select=published_count&id=eq.${claim.distribution_task_id}&limit=1`
+  );
+  const task = first(taskRows);
+  if (task) {
+    await patchRows(env, "distribution_tasks", `id=eq.${claim.distribution_task_id}`, {
+      published_count: Number(task.published_count ?? 0) + 1
+    });
+  }
+}
+
+async function createWalletTransaction(env: WorkerEnv, input: z.infer<typeof walletTransactionSchema>) {
+  const distributor = await findOrCreateDistributor(env, input.distributorName ?? DEFAULT_DISTRIBUTOR_NAME, "186****7108");
+  await insertRow(env, "wallet_transactions", {
+    distributor_id: distributor.id,
+    type: input.type,
+    amount: input.amount,
+    status: input.status,
+    source: input.source,
+    note: input.note ?? ""
+  });
+}
+
+async function createRiskEvent(env: WorkerEnv, input: z.infer<typeof riskEventSchema>) {
+  const distributor = input.distributorName
+    ? await findOrCreateDistributor(env, input.distributorName, "Pending binding")
+    : undefined;
+  await insertRow(env, "risk_events", {
+    distributor_id: distributor?.id,
+    publish_record_id: input.publishRecordId,
+    task_claim_id: input.taskClaimId,
+    title: input.title,
+    description: input.description,
+    status: "open"
+  });
+}
+
+async function applyRiskAction(env: WorkerEnv, riskEventId: string, input: z.infer<typeof riskActionSchema>) {
+  const risk = first(
+    await selectRows<{
+      id: string;
+      distributor_id: string | null;
+      title: string;
+      description: string;
+    }>(env, "risk_events", `select=id,distributor_id,title,description&id=eq.${riskEventId}&limit=1`)
+  );
+  if (!risk) throw new ApiError("not_found", "Risk event not found", 404);
+
+  await insertRow(env, "risk_actions", {
+    risk_event_id: risk.id,
+    action_type: input.actionType,
+    note: input.note ?? ""
+  });
+  await patchRows(env, "risk_events", `id=eq.${risk.id}`, {
+    status: input.status ?? (input.actionType === "resolve" ? "resolved" : "blocked")
+  });
+
+  if (!risk.distributor_id) return;
+
+  const creditDelta =
+    input.creditDelta ??
+    (input.actionType.includes("leak") ? -50 : input.actionType.includes("wrong_product") ? -10 : input.actionType.includes("freeze") ? -30 : 0);
+  if (creditDelta !== 0) {
+    const profile = first(
+      await selectRows<{ credit_score: number | null }>(
+        env,
+        "distributor_profiles",
+        `select=credit_score&id=eq.${risk.distributor_id}&limit=1`
+      )
+    );
+    const nextCredit = Math.max(0, Math.min(100, Number(profile?.credit_score ?? 100) + creditDelta));
+    await insertRow(env, "credit_score_events", {
+      distributor_id: risk.distributor_id,
+      delta: creditDelta,
+      reason: input.note ?? risk.title
+    });
+    await patchRows(env, "distributor_profiles", `id=eq.${risk.distributor_id}`, {
+      credit_score: nextCredit,
+      onboarding_status: nextCredit < 60 ? "suspended" : undefined,
+      updated_at: new Date().toISOString()
+    });
+  }
+
+  if (input.freezeWallet || input.actionType.includes("freeze")) {
+    await insertRow(env, "wallet_transactions", {
+      distributor_id: risk.distributor_id,
+      type: "freeze",
+      amount: 0,
+      status: "frozen",
+      source: risk.title,
+      note: input.note ?? risk.description
+    });
+    await patchRows(env, "settlement_orders", `distributor_id=eq.${risk.distributor_id}&status=neq.paid`, { status: "blocked" }).catch(
+      () => undefined
+    );
+  }
+
+  if (input.pauseAuthorization || input.actionType.includes("pause_authorization")) {
+    await patchRows(env, "authorizations", `distributor_id=eq.${risk.distributor_id}&status=eq.approved`, {
+      status: "paused",
+      paused_reason: input.note ?? risk.title
+    });
+  }
+}
+
+async function createAppeal(env: WorkerEnv, input: z.infer<typeof appealSchema>) {
+  const distributor = await findOrCreateDistributor(env, input.distributorName ?? DEFAULT_DISTRIBUTOR_NAME, "186****7108");
+  await insertRow(env, "appeals", {
+    distributor_id: distributor.id,
+    risk_event_id: input.riskEventId,
+    reason: input.reason,
+    status: "open"
+  });
+}
+
+async function markNotificationRead(env: WorkerEnv, notificationId: string) {
+  await insertRow(env, "notification_reads", {
+    notification_id: notificationId,
+    user_id: MOCK_USER_ID
+  }).catch(() => undefined);
 }
 
 async function seedDemoData(env: WorkerEnv) {
@@ -1337,6 +2943,69 @@ async function readBody<T>(request: Request) {
   return request.json().catch(() => ({})) as Promise<T>;
 }
 
+function mockSession() {
+  return {
+    user: {
+      id: "user-partner",
+      displayName: "周婧",
+      role: "partner",
+      roleLabel: "分发者"
+    },
+    distributor: {
+      id: "demo-distributor",
+      displayName: "周婧",
+      onboardingStatus: "ready_for_authorization",
+      creditScore: 96
+    },
+    providers: {
+      authProvider: "mock",
+      videoProvider: "mock",
+      platformDataProvider: "mock",
+      paymentProvider: "manual"
+    }
+  };
+}
+
+function notImplementedContract(path: string, method: string) {
+  return {
+    accepted: true,
+    mode: "contract_stub",
+    path,
+    method,
+    message: "The endpoint contract is reserved for the full ClipPartner upgrade and currently uses local/mock state."
+  };
+}
+
+async function processClipQueuePayload(env: WorkerEnv, payload: Partial<ClipTaskPayload>) {
+  if (payload.type === "cron.scan") {
+    console.log(JSON.stringify({ level: "info", message: "clip queue cron scan received", createdAt: payload.createdAt }));
+    return;
+  }
+
+  if (payload.type !== "clip.create" || !payload.taskId) {
+    console.warn(JSON.stringify({ level: "warn", message: "unknown clip queue payload", payload }));
+    return;
+  }
+
+  try {
+    await updateManualClipTask(env, payload.taskId, "processing");
+    await completeManualClipTask(env, payload.taskId);
+  } catch (error) {
+    if (error instanceof ApiError && error.code === "not_found") {
+      console.warn(
+        JSON.stringify({
+          level: "warn",
+          message: "queued clip task is not persisted; skipping mock completion",
+          taskId: payload.taskId
+        })
+      );
+      return;
+    }
+    await updateManualClipTask(env, payload.taskId, "failed").catch(() => undefined);
+    throw error;
+  }
+}
+
 const worker = {
   async fetch(request: Request, env: WorkerEnv, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
@@ -1354,6 +3023,180 @@ const worker = {
         return json({ integrations: integrationStatus(env) }, env);
       }
 
+      if (url.pathname === "/me") {
+        return json(await getMe(env), env);
+      }
+
+      if (url.pathname === "/admin/distributors" && request.method === "GET") {
+        const { items, meta } = await listDistributors(env, listOptions(url.searchParams));
+        return json({ distributorProfiles: items, meta }, env);
+      }
+
+      if (url.pathname === "/partner/profile" && request.method === "POST") {
+        await upsertPartnerProfile(env, await readJson(request, partnerProfileSchema));
+        return json(await listState(env), env);
+      }
+
+      if (url.pathname === "/partner/exam-attempts" && request.method === "POST") {
+        await recordPartnerExamAttempt(env, await readJson(request, examAttemptSchema));
+        return json(await listState(env), env, { status: 201 });
+      }
+
+      if (url.pathname === "/partner/agreements/sign" && request.method === "POST") {
+        await signPartnerAgreement(env, await readJson(request, agreementSignSchema), request);
+        return json(await listState(env), env, { status: 201 });
+      }
+
+      if (url.pathname === "/admin/training" && request.method === "GET") {
+        return json(await listTrainingState(env, listOptions(url.searchParams)), env);
+      }
+
+      if (url.pathname === "/admin/authorization-pools" && request.method === "GET") {
+        const { items, meta } = await listAuthorizationPools(env, listOptions(url.searchParams));
+        return json({ authorizationPools: items, meta }, env);
+      }
+
+      if (url.pathname === "/partner/authorizations" && request.method === "GET") {
+        const options = listOptions(url.searchParams);
+        const [formalAuthorizations, authorizationPools] = await Promise.all([
+          listFormalAuthorizations(env, options),
+          listAuthorizationPools(env, options)
+        ]);
+        return json(
+          {
+            formalAuthorizations: formalAuthorizations.items,
+            authorizationPools: authorizationPools.items,
+            meta: formalAuthorizations.meta
+          },
+          env
+        );
+      }
+
+      if (url.pathname === "/admin/authorization-pools" && request.method === "POST") {
+        await createAuthorizationPool(env, await readJson(request, authorizationPoolSchema));
+        return json(await listState(env), env, { status: 201 });
+      }
+
+      const adminAuthorizationPoolMatch = url.pathname.match(/^\/admin\/authorization-pools\/([^/]+)$/);
+      if (adminAuthorizationPoolMatch && request.method === "PATCH") {
+        await updateAuthorizationPool(env, adminAuthorizationPoolMatch[1], await readJson(request, authorizationPoolPatchSchema));
+        return json(await listState(env), env);
+      }
+
+      const adminAuthorizationReviewMatch = url.pathname.match(/^\/admin\/authorization-requests\/([^/]+)\/review$/);
+      if (adminAuthorizationReviewMatch && request.method === "PATCH") {
+        await reviewAuthorizationRequest(
+          env,
+          adminAuthorizationReviewMatch[1],
+          await readJson(request, authorizationReviewSchema)
+        );
+        return json(await listState(env), env);
+      }
+
+      if (url.pathname === "/admin/distribution-tasks" && request.method === "GET") {
+        const { items, meta } = await listDistributionTasks(env, listOptions(url.searchParams));
+        return json({ distributionTasks: items, meta }, env);
+      }
+
+      if (url.pathname === "/admin/distribution-tasks" && request.method === "POST") {
+        await createDistributionTask(env, await readJson(request, distributionTaskSchema));
+        return json(await listState(env), env, { status: 201 });
+      }
+
+      const adminDistributionTaskMatch = url.pathname.match(/^\/admin\/distribution-tasks\/([^/]+)$/);
+      if (adminDistributionTaskMatch && request.method === "PATCH") {
+        await updateDistributionTask(env, adminDistributionTaskMatch[1], await readJson(request, distributionTaskPatchSchema));
+        return json(await listState(env), env);
+      }
+
+      if (url.pathname === "/partner/tasks" && request.method === "GET") {
+        const options = listOptions(url.searchParams);
+        const [distributionTasks, taskClaims] = await Promise.all([
+          listDistributionTasks(env, { ...options, status: options.status ?? "open" }),
+          listTaskClaims(env, options)
+        ]);
+        return json({ distributionTasks: distributionTasks.items, taskClaims: taskClaims.items, meta: distributionTasks.meta }, env);
+      }
+
+      const partnerTaskClaimMatch = url.pathname.match(/^\/partner\/tasks\/([^/]+)\/claim$/);
+      if (partnerTaskClaimMatch && request.method === "POST") {
+        await claimDistributionTask(env, partnerTaskClaimMatch[1], await readJson(request, taskClaimSchema), request);
+        return json(await listState(env), env, { status: 201 });
+      }
+
+      const claimDownloadMatch = url.pathname.match(/^\/claims\/([^/]+)\/download-url$/);
+      if (claimDownloadMatch && request.method === "POST") {
+        const downloadToken = await createClaimDownloadUrl(env, claimDownloadMatch[1], request);
+        return json({ ...(await listState(env)), downloadToken }, env, { status: 201 });
+      }
+
+      const claimSubmitMatch = url.pathname.match(/^\/claims\/([^/]+)\/submit$/);
+      if (claimSubmitMatch && request.method === "POST") {
+        await submitTaskClaim(env, claimSubmitMatch[1], await readJson(request, taskClaimSubmitSchema));
+        return json(await listState(env), env);
+      }
+
+      if (url.pathname === "/partner/wallet" && request.method === "GET") {
+        return json(await partnerWalletResponse(env, listOptions(url.searchParams)), env);
+      }
+
+      if (url.pathname === "/partner/wallet/transactions" && request.method === "POST") {
+        await createWalletTransaction(env, await readJson(request, walletTransactionSchema));
+        return json(await listState(env), env, { status: 201 });
+      }
+
+      if (url.pathname === "/admin/risk-events" && request.method === "POST") {
+        await createRiskEvent(env, await readJson(request, riskEventSchema));
+        return json(await listState(env), env, { status: 201 });
+      }
+
+      const riskEventActionMatch = url.pathname.match(/^\/admin\/risk-events\/([^/]+)\/action$/);
+      if (riskEventActionMatch && request.method === "PATCH") {
+        await applyRiskAction(env, riskEventActionMatch[1], await readJson(request, riskActionSchema));
+        return json(await listState(env), env);
+      }
+
+      if (url.pathname === "/partner/appeals" && request.method === "POST") {
+        await createAppeal(env, await readJson(request, appealSchema));
+        return json(await listState(env), env, { status: 201 });
+      }
+
+      if (url.pathname === "/notifications" && request.method === "GET") {
+        const { items, meta } = await listNotifications(env, listOptions(url.searchParams));
+        return json({ notifications: items, meta }, env);
+      }
+
+      const notificationReadMatch = url.pathname.match(/^\/notifications\/([^/]+)\/read$/);
+      if (notificationReadMatch && request.method === "POST") {
+        await markNotificationRead(env, notificationReadMatch[1]);
+        return json(await listState(env), env);
+      }
+
+      if (
+        [
+          "/partner/social-accounts",
+          "/partner/authorization-requests",
+          "/admin/performance-imports",
+          "/admin/settlement-periods/generate",
+          "/ffmpeg/jobs",
+          "/ffmpeg/webhook"
+        ].includes(url.pathname) ||
+        /^\/admin\/authorizations\/[^/]+\/(pause|resume)$/.test(url.pathname) ||
+        /^\/admin\/products\/[^/]+\/commission-history$/.test(url.pathname) ||
+        /^\/admin\/products\/[^/]+\/disable$/.test(url.pathname) ||
+        /^\/admin\/performance-imports\/[^/]+(\/errors)?$/.test(url.pathname) ||
+        /^\/admin\/publish-records\/[^/]+\/verify$/.test(url.pathname) ||
+        /^\/admin\/publish-records\/bulk-review$/.test(url.pathname) ||
+        /^\/admin\/settlements\/[^/]+\/(confirm|pay)$/.test(url.pathname) ||
+        /^\/partner\/settlements\/[^/]+\/dispute$/.test(url.pathname) ||
+        /^\/admin\/appeals\/[^/]+$/.test(url.pathname) ||
+        /^\/ffmpeg\/jobs\/[^/]+$/.test(url.pathname)
+      ) {
+        return json(notImplementedContract(url.pathname, request.method), env, {
+          status: request.method === "GET" ? 200 : 202
+        });
+      }
+
       if (url.pathname === "/state" && request.method === "GET") {
         return json(await listState(env), env);
       }
@@ -1361,6 +3204,16 @@ const worker = {
       if (url.pathname === "/authorization-requests" && request.method === "GET") {
         const { items, meta } = await listAuthorizationRequests(env, listOptions(url.searchParams));
         return json({ authorizationRequests: items, meta }, env);
+      }
+
+      if (url.pathname === "/account-bindings" && request.method === "GET") {
+        const { items, meta } = await listAccountBindings(env, listOptions(url.searchParams));
+        return json({ accountBindings: items, meta }, env);
+      }
+
+      if (url.pathname === "/clip-tasks" && request.method === "GET") {
+        const { items, meta } = await listClipTasks(env, listOptions(url.searchParams));
+        return json({ clipTasks: items, meta }, env);
       }
 
       if (url.pathname === "/materials" && request.method === "GET") {
@@ -1398,6 +3251,16 @@ const worker = {
         return json(await listState(env), env, { status: 201 });
       }
 
+      if (url.pathname === "/account-bindings" && request.method === "POST") {
+        await createAccountBinding(env, await readJson(request, accountBindingSchema));
+        return json(await listState(env), env, { status: 201 });
+      }
+
+      if (url.pathname === "/clip-tasks" && request.method === "POST") {
+        await createManualClipTask(env, await readJson(request, clipTaskSchema));
+        return json(await listState(env), env, { status: 201 });
+      }
+
       if (url.pathname === "/recordings/direct-upload/init" && request.method === "POST") {
         const upload = await createDirectUpload(env, await readJson(request, directUploadInitSchema));
         return json({ upload }, env, { status: 201 });
@@ -1418,7 +3281,34 @@ const worker = {
       const authorizationMatch = url.pathname.match(/^\/authorization-requests\/([^/]+)$/);
       if (authorizationMatch && request.method === "PATCH") {
         const body = await readJson(request, statusSchemas.authorization);
-        await patchRows(env, "authorization_requests", `id=eq.${authorizationMatch[1]}`, { status: body.status });
+        if (body.status === "pending") {
+          await patchRows(env, "authorization_requests", `id=eq.${authorizationMatch[1]}`, { status: body.status });
+        } else {
+          await reviewAuthorizationRequest(env, authorizationMatch[1], {
+            status: body.status,
+            reviewNote: "Reviewed from legacy route"
+          });
+        }
+        return json(await listState(env), env);
+      }
+
+      const accountBindingMatch = url.pathname.match(/^\/account-bindings\/([^/]+)$/);
+      if (accountBindingMatch && request.method === "PATCH") {
+        const body = await readJson(request, statusSchemas.accountBinding);
+        await patchRows(env, "social_accounts", `id=eq.${accountBindingMatch[1]}`, { status: body.status });
+        return json(await listState(env), env);
+      }
+
+      const clipTaskCompleteMatch = url.pathname.match(/^\/clip-tasks\/([^/]+)\/complete$/);
+      if (clipTaskCompleteMatch && request.method === "POST") {
+        await completeManualClipTask(env, clipTaskCompleteMatch[1]);
+        return json(await listState(env), env);
+      }
+
+      const clipTaskMatch = url.pathname.match(/^\/clip-tasks\/([^/]+)$/);
+      if (clipTaskMatch && request.method === "PATCH") {
+        const body = await readJson(request, statusSchemas.clipTask);
+        await updateManualClipTask(env, clipTaskMatch[1], body.status);
         return json(await listState(env), env);
       }
 
@@ -1440,7 +3330,47 @@ const worker = {
       const riskMatch = url.pathname.match(/^\/risk-records\/([^/]+)$/);
       if (riskMatch && request.method === "PATCH") {
         const body = await readJson(request, statusSchemas.risk);
+        const riskRows = await selectRows<{
+          account_name: string;
+          handling_note: string | null;
+          work_url: string;
+        }>(env, "violation_leads", `select=account_name,handling_note,work_url&id=eq.${riskMatch[1]}&limit=1`);
+        const risk = first(riskRows);
         await patchRows(env, "violation_leads", `id=eq.${riskMatch[1]}`, { status: body.status });
+        if (body.status === "blocked" && risk) {
+          const distributor = await findOrCreateDistributor(env, risk.account_name, "Pending binding");
+          const profile = first(
+            await safeRows(() =>
+              selectRows<{ credit_score: number | null }>(
+                env,
+                "distributor_profiles",
+                `select=credit_score&id=eq.${distributor.id}&limit=1`
+              )
+            )
+          );
+          const nextCredit = Math.max(0, Number(profile?.credit_score ?? 100) - 30);
+          await insertRow(env, "credit_score_events", {
+            distributor_id: distributor.id,
+            delta: -30,
+            reason: risk.handling_note ?? "Risk record blocked"
+          }).catch(() => undefined);
+          await patchRows(env, "distributor_profiles", `id=eq.${distributor.id}`, {
+            credit_score: nextCredit,
+            onboarding_status: nextCredit < 60 ? "suspended" : undefined,
+            updated_at: new Date().toISOString()
+          }).catch(() => undefined);
+          await insertRow(env, "wallet_transactions", {
+            distributor_id: distributor.id,
+            type: "freeze",
+            amount: 0,
+            status: "frozen",
+            source: risk.work_url,
+            note: risk.handling_note ?? "Risk freeze"
+          }).catch(() => undefined);
+          await patchRows(env, "settlement_orders", `distributor_id=eq.${distributor.id}&status=neq.paid`, {
+            status: "blocked"
+          }).catch(() => undefined);
+        }
         return json(await listState(env), env);
       }
 
@@ -1512,17 +3442,6 @@ const worker = {
         return json(await listState(env), env);
       }
 
-      if (url.pathname === "/clip-tasks" && request.method === "POST") {
-        const body = await readBody<Record<string, unknown>>(request);
-        await env.CLIP_TASK_QUEUE.send({
-          type: "clip.create",
-          payload: body,
-          createdAt: new Date().toISOString()
-        });
-
-        return json({ ok: true, queued: true }, env, { status: 202 });
-      }
-
       return errorJson(new ApiError("not_found", "Not found", 404), env);
     } catch (error) {
       logError(request, error);
@@ -1535,6 +3454,13 @@ const worker = {
       type: "cron.scan",
       createdAt: new Date().toISOString()
     });
+  },
+
+  async queue(batch: MessageBatch<ClipTaskPayload>, env: WorkerEnv): Promise<void> {
+    for (const message of batch.messages) {
+      await processClipQueuePayload(env, message.body);
+      message.ack();
+    }
   }
 };
 

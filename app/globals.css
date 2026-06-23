@@ -56,6 +56,47 @@ textarea {
   gap: 28px;
 }
 
+.sidebar-user {
+  margin-top: auto;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  padding-top: 16px;
+  display: grid;
+  gap: 10px;
+}
+
+.sidebar-user-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.sidebar-user-name {
+  font-weight: 800;
+}
+
+.sidebar-user-role {
+  color: #a9b8b2;
+  font-size: 12px;
+}
+
+.sidebar-logout {
+  min-height: 36px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  background: transparent;
+  color: #c9d5d0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.sidebar-logout:hover {
+  background: #21332d;
+  color: #ffffff;
+}
+
 .brand-block {
   display: grid;
   gap: 6px;
@@ -299,6 +340,11 @@ textarea {
   border-bottom: 1px solid var(--line);
 }
 
+.table-header.compact {
+  padding: 0 0 14px;
+  border-bottom: 0;
+}
+
 .table-title {
   margin: 0;
   font-size: 17px;
@@ -337,6 +383,14 @@ textarea {
   margin-top: 4px;
   color: var(--muted);
   font-size: 13px;
+}
+
+.text-link {
+  display: inline-flex;
+  margin-top: 6px;
+  color: var(--brand-dark);
+  font-size: 13px;
+  font-weight: 700;
 }
 
 .config-list {
@@ -455,6 +509,226 @@ textarea {
   gap: 8px;
 }
 
+.detail-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.65fr);
+  gap: 18px;
+}
+
+.video-preview {
+  min-height: 340px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, rgba(21, 33, 29, 0.88), rgba(15, 139, 105, 0.72)),
+    url("https://images.unsplash.com/photo-1551817958-d9d86fb29431?auto=format&fit=crop&w=1200&q=80");
+  background-size: cover;
+  background-position: center;
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 24px;
+}
+
+.material-detail-meta {
+  margin-top: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.info-list {
+  display: grid;
+  gap: 10px;
+}
+
+.info-list div {
+  min-height: 48px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.info-list span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.progress-track {
+  width: 150px;
+  height: 8px;
+  border-radius: 999px;
+  background: #edf2f0;
+  overflow: hidden;
+}
+
+.progress-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--brand);
+}
+
+.analytics-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.analytics-cell {
+  min-height: 84px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  display: grid;
+  align-content: center;
+  gap: 8px;
+}
+
+.analytics-cell span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.analytics-cell strong {
+  font-size: 26px;
+}
+
+.product-bind-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.settings-grid label {
+  display: grid;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.settings-wide {
+  grid-column: 1 / -1;
+}
+
+.auth-loading {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--muted);
+}
+
+.spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--line);
+  border-top-color: var(--brand);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.login-shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: minmax(320px, 0.85fr) minmax(420px, 1.15fr);
+  align-items: center;
+  gap: 22px;
+  padding: 40px;
+  background:
+    linear-gradient(120deg, rgba(15, 139, 105, 0.08), rgba(232, 143, 42, 0.08)),
+    var(--bg);
+}
+
+.login-panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  padding: 24px;
+}
+
+.login-title {
+  margin: 0;
+  font-size: 34px;
+  line-height: 1.15;
+}
+
+.login-form {
+  margin-top: 22px;
+  display: grid;
+  gap: 14px;
+}
+
+.login-form label {
+  display: grid;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.form-error {
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  background: #fff1f2;
+  color: var(--danger);
+  padding: 10px 12px;
+  font-size: 13px;
+}
+
+.account-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.account-card {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--ink);
+  padding: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.account-card:hover {
+  border-color: var(--brand);
+  box-shadow: var(--shadow);
+}
+
+.account-desc {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 @media (max-width: 980px) {
   .app-shell {
     grid-template-columns: 1fr;
@@ -473,13 +747,24 @@ textarea {
 
   .metrics-grid,
   .content-grid,
-  .material-grid {
+  .material-grid,
+  .detail-grid,
+  .product-bind-grid,
+  .settings-grid,
+  .analytics-grid {
     grid-template-columns: 1fr;
   }
 
   .topbar,
-  .partner-header-inner {
+  .partner-header-inner,
+  .login-shell {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .login-shell {
+    display: grid;
+    grid-template-columns: 1fr;
+    padding: 18px;
   }
 }

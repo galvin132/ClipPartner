@@ -8,7 +8,13 @@ import { StatusBadge } from "@/components/Badge";
 import { useClipPartnerStore } from "@/lib/local-store";
 
 export default function AuthorizationsPage() {
-  const { state, addAuthorizationRequest, updateAuthorizationStatus, refreshRemoteList } = useClipPartnerStore();
+  const {
+    state,
+    addAuthorizationRequest,
+    updateAuthorizationStatus,
+    updateAccountBindingStatus,
+    refreshRemoteList
+  } = useClipPartnerStore();
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [ipFilter, setIpFilter] = useState("all");
@@ -19,6 +25,8 @@ export default function AuthorizationsPage() {
         status: statusFilter,
         limit: 50
       });
+      void refreshRemoteList("authorizationPools", { limit: 50 });
+      void refreshRemoteList("formalAuthorizations", { limit: 50 });
     }, 250);
 
     return () => window.clearTimeout(timer);
@@ -36,6 +44,19 @@ export default function AuthorizationsPage() {
     const matchesIp = ipFilter === "all" || request.ipName === ipFilter;
     return matchesKeyword && matchesStatus && matchesIp;
   });
+
+  function findBinding(distributorName: string, socialAccount: string) {
+    return state.accountBindings.find(
+      (item) => item.distributorName === distributorName && item.accountName === socialAccount
+    );
+  }
+
+  function reviewAuthorization(requestId: string, bindingId: string | undefined, status: "approved" | "paused" | "rejected") {
+    updateAuthorizationStatus(requestId, status);
+    if (bindingId) {
+      updateAccountBindingStatus(bindingId, status === "approved" ? "approved" : status);
+    }
+  }
 
   return (
     <AppShell active="/admin/authorizations">
@@ -103,7 +124,9 @@ export default function AuthorizationsPage() {
           <thead>
             <tr>
               <th>分发者</th>
+              <th>准入</th>
               <th>绑定账号</th>
+              <th>账号资料</th>
               <th>申请 IP</th>
               <th>申请说明</th>
               <th>状态</th>
@@ -111,53 +134,83 @@ export default function AuthorizationsPage() {
             </tr>
           </thead>
           <tbody>
-            {authorizationRequests.map((request) => (
-              <tr key={request.id}>
-                <td>
-                  <div className="item-title">{request.distributorName}</div>
-                  <div className="item-meta">{request.phone}</div>
-                </td>
-                <td>
-                  <div className="item-title">{request.socialAccount}</div>
-                  <div className="item-meta">
-                    {request.platform} · {request.appliedAt}
-                  </div>
-                </td>
-                <td>{request.ipName}</td>
-                <td>{request.reason}</td>
-                <td>
-                  <StatusBadge status={request.status} />
-                </td>
-                <td>
-                  <div className="toolbar">
-                    <button
-                      className="button"
-                      aria-label="通过"
-                      title="通过"
-                      onClick={() => updateAuthorizationStatus(request.id, "approved")}
-                    >
-                      <Check size={16} aria-hidden />
-                    </button>
-                    <button
-                      className="button"
-                      aria-label="暂停"
-                      title="暂停"
-                      onClick={() => updateAuthorizationStatus(request.id, "paused")}
-                    >
-                      <Pause size={16} aria-hidden />
-                    </button>
-                    <button
-                      className="button"
-                      aria-label="拒绝"
-                      title="拒绝"
-                      onClick={() => updateAuthorizationStatus(request.id, "rejected")}
-                    >
-                      <X size={16} aria-hidden />
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
+            {authorizationRequests.map((request) => {
+              const binding = findBinding(request.distributorName, request.socialAccount);
+              const profile = state.distributorProfiles.find((item) => item.displayName === request.distributorName);
+              const agreement = state.agreementSignatures.find((item) => item.distributorName === request.distributorName);
+              return (
+                <tr key={request.id}>
+                  <td>
+                    <div className="item-title">{request.distributorName}</div>
+                    <div className="item-meta">{request.phone}</div>
+                  </td>
+                  <td>
+                    {profile ? (
+                      <>
+                        <StatusBadge status={profile.onboardingStatus} />
+                        <div className="item-meta">
+                          信用 {profile.creditScore} · 考试 {profile.examScore} · {agreement ? "协议已签" : "协议待签"}
+                        </div>
+                      </>
+                    ) : (
+                      <span className="badge warning">待建档</span>
+                    )}
+                  </td>
+                  <td>
+                    <div className="item-title">{request.socialAccount}</div>
+                    <div className="item-meta">
+                      {request.platform} · {request.appliedAt}
+                    </div>
+                  </td>
+                  <td>
+                    {binding ? (
+                      <>
+                        <div className="item-title">{binding.followers.toLocaleString("zh-CN")} 粉丝</div>
+                        <div className="item-meta">{binding.category}</div>
+                        <a className="text-link" href={binding.homepageUrl} target="_blank" rel="noreferrer">
+                          查看主页
+                        </a>
+                      </>
+                    ) : (
+                      <span className="badge warning">待补充账号资料</span>
+                    )}
+                  </td>
+                  <td>{request.ipName}</td>
+                  <td>{request.reason}</td>
+                  <td>
+                    <StatusBadge status={request.status} />
+                  </td>
+                  <td>
+                    <div className="toolbar">
+                      <button
+                        className="button"
+                        aria-label="通过"
+                        title="通过"
+                        onClick={() => reviewAuthorization(request.id, binding?.id, "approved")}
+                      >
+                        <Check size={16} aria-hidden />
+                      </button>
+                      <button
+                        className="button"
+                        aria-label="暂停"
+                        title="暂停"
+                        onClick={() => reviewAuthorization(request.id, binding?.id, "paused")}
+                      >
+                        <Pause size={16} aria-hidden />
+                      </button>
+                      <button
+                        className="button"
+                        aria-label="拒绝"
+                        title="拒绝"
+                        onClick={() => reviewAuthorization(request.id, binding?.id, "rejected")}
+                      >
+                        <X size={16} aria-hidden />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </section>

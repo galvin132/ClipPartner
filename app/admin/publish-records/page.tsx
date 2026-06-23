@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, Link2, Search, Upload, X } from "lucide-react";
+import { Check, Link2, Search, ShieldAlert, Upload, X } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
 import { StatusBadge } from "@/components/Badge";
 import { money } from "@/lib/domain";
 import { useClipPartnerStore } from "@/lib/local-store";
+import { getProductValidity } from "@/lib/product-rules";
 
 function samplePerformance(index: number) {
   const gmv = 3600 + index * 1280;
@@ -17,7 +18,8 @@ function samplePerformance(index: number) {
 }
 
 export default function PublishRecordsPage() {
-  const { state, importPerformance, updatePublishStatus, syncStatus, refreshRemoteList } = useClipPartnerStore();
+  const { state, autoReviewPublishRecord, importPerformance, updatePublishStatus, syncStatus, refreshRemoteList } =
+    useClipPartnerStore();
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
 
@@ -105,6 +107,7 @@ export default function PublishRecordsPage() {
               <th>商品</th>
               <th>平台</th>
               <th>提交时间</th>
+              <th>作品链接 / 审核说明</th>
               <th>状态</th>
               <th>GMV / 佣金</th>
               <th>操作</th>
@@ -113,13 +116,21 @@ export default function PublishRecordsPage() {
           <tbody>
             {publishRecords.map((record, index) => {
               const performance = samplePerformance(index);
+              const productValidity = getProductValidity(state.products, record.productName, record.platform);
               return (
                 <tr key={record.id}>
                   <td>{record.distributorName}</td>
                   <td>{record.materialTitle}</td>
-                  <td>{record.productName}</td>
+                  <td>
+                    <div className="item-title">{record.productName}</div>
+                    {!productValidity.isValid ? <div className="item-meta">{productValidity.reason}</div> : null}
+                  </td>
                   <td>{record.platform}</td>
                   <td>{record.submittedAt}</td>
+                  <td>
+                    <div className="item-title">{record.publishUrl || "待回填"}</div>
+                    <div className="item-meta">{record.reviewNote || "等待处理"}</div>
+                  </td>
                   <td>
                     <StatusBadge status={record.status} />
                   </td>
@@ -139,16 +150,26 @@ export default function PublishRecordsPage() {
                       </button>
                       <button
                         className="button"
-                        title={`导入 ${money(performance.gmv)} GMV`}
+                        title={productValidity.isValid ? `导入 ${money(performance.gmv)} GMV` : productValidity.reason}
                         aria-label="导入表现数据"
+                        disabled={!productValidity.isValid && record.status !== "invalid"}
                         onClick={() => importPerformance(record.id, performance.gmv, performance.commission)}
                       >
                         <Upload size={16} aria-hidden />
                       </button>
                       <button
                         className="button"
-                        title="核验通过"
+                        title="模拟核验"
+                        aria-label="模拟核验"
+                        onClick={() => autoReviewPublishRecord(record.id)}
+                      >
+                        <ShieldAlert size={16} aria-hidden />
+                      </button>
+                      <button
+                        className="button"
+                        title={productValidity.isValid ? "核验通过" : productValidity.reason}
                         aria-label="核验通过"
+                        disabled={!productValidity.isValid}
                         onClick={() => updatePublishStatus(record.id, "verified")}
                       >
                         <Check size={16} aria-hidden />

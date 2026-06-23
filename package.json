@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit",
     "verify": "npm run typecheck && npm run lint && npm run build && npm run worker:types && npm audit",
     "smoke": "node scripts/smoke.mjs",
+    "persistence:smoke": "node scripts/persistence-smoke.mjs",
     "worker:types": "node ./node_modules/wrangler/bin/wrangler.js types --config workers/api/wrangler.toml",
     "worker:dev": "node ./node_modules/wrangler/bin/wrangler.js dev --config workers/api/wrangler.toml",
     "worker:deploy": "node ./node_modules/wrangler/bin/wrangler.js deploy --config workers/api/wrangler.toml"

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Analytics } from "@vercel/analytics/next";
 import { SpeedInsights } from "@vercel/speed-insights/next";
+import { AuthProvider } from "@/components/AuthProvider";
 import { ClientObservability } from "@/components/ClientObservability";
 import "./globals.css";
 
@@ -17,10 +18,12 @@ export default function RootLayout({
   return (
     <html lang="zh-CN">
       <body>
-        {children}
-        <ClientObservability />
-        <Analytics />
-        <SpeedInsights />
+        <AuthProvider>
+          {children}
+          <ClientObservability />
+          <Analytics />
+          <SpeedInsights />
+        </AuthProvider>
       </body>
     </html>
   );
