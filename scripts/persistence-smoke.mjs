@@ -53,12 +53,32 @@ function sleep(ms) {
 
 async function api(path, init = {}) {
   const headers = new Headers(init.headers);
+  const method = init.method || "GET";
   headers.set("content-type", "application/json");
-  if (path.startsWith("/admin/")) {
+  const adminMutation =
+    method !== "GET" &&
+    (path.startsWith("/account-bindings/") ||
+      path.startsWith("/authorization-requests/") ||
+      path === "/materials" ||
+      (path.startsWith("/materials/") && !path.endsWith("/claim")) ||
+      path === "/products" ||
+      path.startsWith("/products/") ||
+      path === "/clip-tasks" ||
+      path.startsWith("/clip-tasks/") ||
+      path.startsWith("/publish-records/") ||
+      path === "/risk-records" ||
+      path.startsWith("/risk-records/"));
+  if (path.startsWith("/admin/") || adminMutation) {
     headers.set("x-clip-role", "admin");
     headers.set("x-clip-user-id", "smoke-admin");
     headers.set("x-clip-display-name", "Smoke Admin");
-  } else if (path.startsWith("/partner/") || path.startsWith("/claims/") || path.startsWith("/notifications/")) {
+  } else if (
+    path.startsWith("/partner/") ||
+    path.startsWith("/claims/") ||
+    path.startsWith("/notifications/") ||
+    path === "/account-bindings" ||
+    path === "/authorization-requests"
+  ) {
     headers.set("x-clip-role", "partner");
     headers.set("x-clip-user-id", "smoke-partner");
     headers.set("x-clip-display-name", names.distributor);
@@ -154,6 +174,17 @@ let notificationId;
 
 try {
   await expectApiError(
+    "/partner/wallet?limit=1",
+    {
+      headers: {
+        authorization: "Bearer invalid-token"
+      }
+    },
+    401,
+    "invalid_token"
+  );
+
+  await expectApiError(
     "/admin/distributors?limit=1",
     {
       headers: {
@@ -170,20 +201,18 @@ try {
   await api("/partner/profile", {
     method: "POST",
     body: JSON.stringify({
-      distributorName: names.distributor,
       phone: "13900000000",
       wechatId: suffix,
       onboardingStatus: "training_pending"
     })
   });
-  await api("/partner/exam-attempts", { method: "POST", body: JSON.stringify({ distributorName: names.distributor, score: 92 }) });
-  let state = await api("/partner/agreements/sign", { method: "POST", body: JSON.stringify({ distributorName: names.distributor }) });
+  await api("/partner/exam-attempts", { method: "POST", body: JSON.stringify({ score: 92 }) });
+  let state = await api("/partner/agreements/sign", { method: "POST", body: JSON.stringify({}) });
   find(state.distributorProfiles, (item) => item.displayName === names.distributor, "profile");
 
   state = await api("/account-bindings", {
     method: "POST",
     body: JSON.stringify({
-      distributorName: names.distributor,
       platform: "douyin",
       accountName: names.account,
       homepageUrl: `https://example.com/${suffix}/account`,
@@ -216,7 +245,6 @@ try {
   state = await api("/authorization-requests", {
     method: "POST",
     body: JSON.stringify({
-      distributorName: names.distributor,
       socialAccount: names.account,
       platform: "douyin",
       ipName: names.ip,
@@ -259,7 +287,7 @@ try {
   const task = find(state.distributionTasks, (item) => item.title === names.task, "distribution task");
   state = await api(`/partner/tasks/${task.id}/claim`, {
     method: "POST",
-    body: JSON.stringify({ distributorName: names.distributor })
+    body: JSON.stringify({})
   });
   const claim = find(state.taskClaims, (item) => item.taskId === task.id && item.status === "downloaded", "downloaded claim");
 
@@ -272,7 +300,6 @@ try {
   state = await api("/partner/wallet/transactions", {
     method: "POST",
     body: JSON.stringify({
-      distributorName: names.distributor,
       type: "commission",
       amount: 88,
       status: "available",
@@ -305,7 +332,7 @@ try {
 
   await api("/partner/appeals", {
     method: "POST",
-    body: JSON.stringify({ distributorName: names.distributor, riskEventId, reason: "E2E appeal" })
+    body: JSON.stringify({ riskEventId, reason: "E2E appeal" })
   });
 
   const notifications = await api("/notifications?limit=1");

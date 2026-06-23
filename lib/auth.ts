@@ -10,7 +10,11 @@ export type MockUser = {
   description: string;
 };
 
-export type AuthSession = Omit<MockUser, "password">;
+export type AuthSession = Omit<MockUser, "password"> & {
+  authProvider?: "mock" | "supabase";
+  accessToken?: string;
+  expiresAt?: number;
+};
 
 export const mockUsers: MockUser[] = [
   {
@@ -80,7 +84,7 @@ const defaultRoutes: Record<UserRole, string> = {
 
 export function toSession(user: MockUser): AuthSession {
   const { password: _password, ...session } = user;
-  return session;
+  return { ...session, authProvider: "mock" };
 }
 
 export function authenticateMockUser(username: string, password: string) {

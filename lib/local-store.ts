@@ -66,15 +66,25 @@ function sessionHeaders() {
   try {
     const raw = window.localStorage.getItem(AUTH_STORAGE_KEY);
     if (!raw) return {};
-    const session = JSON.parse(raw) as { id?: unknown; role?: unknown; displayName?: unknown };
+    const session = JSON.parse(raw) as {
+      id?: unknown;
+      role?: unknown;
+      displayName?: unknown;
+      authProvider?: unknown;
+      accessToken?: unknown;
+    };
     if (typeof session.role !== "string" || !AUTH_ROLES.has(session.role)) return {};
 
-    return {
+    const headers: Record<string, string> = {
       "x-clip-role": session.role,
       "x-clip-user-id": typeof session.id === "string" ? session.id : `mock-${session.role}`,
       "x-clip-display-name": typeof session.displayName === "string" ? session.displayName : "",
-      "x-clip-auth-provider": "mock"
+      "x-clip-auth-provider": session.authProvider === "supabase" ? "supabase" : "mock"
     };
+    if (session.authProvider === "supabase" && typeof session.accessToken === "string" && session.accessToken) {
+      headers.authorization = `Bearer ${session.accessToken}`;
+    }
+    return headers;
   } catch {
     return {};
   }
@@ -647,9 +657,11 @@ export function useClipPartnerStore() {
   function addAuthorizationRequest(
     input: Pick<AuthorizationRequest, "distributorName" | "socialAccount" | "platform" | "ipName" | "reason">
   ) {
+    const { distributorName: _distributorName, ...remoteInput } = input;
+    void _distributorName;
     void syncMutation(
       "/authorization-requests",
-      { method: "POST", body: JSON.stringify(input) },
+      { method: "POST", body: JSON.stringify(remoteInput) },
       () => ({
         ...state,
         authorizationRequests: [
@@ -672,9 +684,11 @@ export function useClipPartnerStore() {
       "distributorName" | "platform" | "accountName" | "homepageUrl" | "followers" | "category" | "note"
     >
   ) {
+    const { distributorName: _distributorName, ...remoteInput } = input;
+    void _distributorName;
     void syncMutation(
       "/account-bindings",
-      { method: "POST", body: JSON.stringify(input) },
+      { method: "POST", body: JSON.stringify(remoteInput) },
       () => ({
         ...state,
         accountBindings: [
@@ -704,7 +718,7 @@ export function useClipPartnerStore() {
   function updateDistributorOnboarding(distributorName: string, onboardingStatus: DistributorProfile["onboardingStatus"]) {
     void syncMutation(
       "/partner/profile",
-      { method: "POST", body: JSON.stringify({ distributorName, onboardingStatus }) },
+      { method: "POST", body: JSON.stringify({ onboardingStatus }) },
       () => ({
         ...state,
         distributorProfiles: state.distributorProfiles.map((item) =>
@@ -718,7 +732,7 @@ export function useClipPartnerStore() {
     const passed = score >= 80;
     void syncMutation(
       "/partner/exam-attempts",
-      { method: "POST", body: JSON.stringify({ distributorName, score }) },
+      { method: "POST", body: JSON.stringify({ score }) },
       () => ({
         ...state,
         examAttempts: [
@@ -747,7 +761,7 @@ export function useClipPartnerStore() {
   function signAgreement(distributorName: string) {
     void syncMutation(
       "/partner/agreements/sign",
-      { method: "POST", body: JSON.stringify({ distributorName }) },
+      { method: "POST", body: JSON.stringify({}) },
       () => ({
       ...state,
       agreementSignatures: [
@@ -1092,7 +1106,7 @@ export function useClipPartnerStore() {
   function claimMaterial(materialId: string, distributorName = "周婧") {
     void syncMutation(
       `/materials/${materialId}/claim`,
-      { method: "POST", body: JSON.stringify({ distributorName }) },
+      { method: "POST", body: JSON.stringify({}) },
       () => {
         const material = state.materials.find((item) => item.id === materialId);
         if (!material) return state;
@@ -1148,7 +1162,7 @@ export function useClipPartnerStore() {
   function claimDistributionTask(taskId: string, distributorName = "周婧") {
     void syncMutation(
       `/partner/tasks/${taskId}/claim`,
-      { method: "POST", body: JSON.stringify({ distributorName }) },
+      { method: "POST", body: JSON.stringify({}) },
       () => {
       const task = state.distributionTasks.find((item) => item.id === taskId);
       if (!task || task.status !== "open" || task.claimedCount >= task.claimLimit) return state;
@@ -1522,9 +1536,11 @@ export function useClipPartnerStore() {
   }
 
   function addWalletTransaction(input: Pick<WalletTransaction, "distributorName" | "type" | "amount" | "status" | "source" | "note">) {
+    const { distributorName: _distributorName, ...remoteInput } = input;
+    void _distributorName;
     void syncMutation(
       "/partner/wallet/transactions",
-      { method: "POST", body: JSON.stringify(input) },
+      { method: "POST", body: JSON.stringify(remoteInput) },
       () => ({
         ...state,
         walletTransactions: [

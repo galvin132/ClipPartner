@@ -35,12 +35,24 @@ type TaskClaimStatus = "claimed" | "downloaded" | "submitted" | "overdue" | "ver
 type WalletTransactionType = "commission" | "adjustment" | "freeze" | "payout";
 type WalletTransactionStatus = "available" | "frozen" | "pending" | "paid";
 type UserRole = "admin" | "reviewer" | "finance" | "partner";
+type SessionProvider = "mock" | "supabase";
 
 type RequestSession = {
   id: string;
+  userId?: string;
   role: UserRole;
   displayName: string;
+  email?: string;
+  provider: SessionProvider;
   isMock: boolean;
+};
+
+type SupabaseAuthUser = {
+  id: string;
+  email?: string;
+  phone?: string;
+  app_metadata?: Record<string, unknown>;
+  user_metadata?: Record<string, unknown>;
 };
 
 const USER_ROLES = new Set<UserRole>(["admin", "reviewer", "finance", "partner"]);
@@ -52,7 +64,7 @@ const ROLE_LABELS: Record<UserRole, string> = {
 };
 
 type AuthorizationRequestInput = {
-  distributorName: string;
+  distributorName?: string;
   socialAccount: string;
   platform: string;
   ipName: string;
@@ -81,7 +93,7 @@ type RiskRecordInput = {
 };
 
 type AccountBindingInput = {
-  distributorName: string;
+  distributorName?: string;
   platform: string;
   accountName: string;
   homepageUrl: string;
@@ -156,6 +168,7 @@ type WorkerEnv = Cloudflare.Env & {
   ALLOW_MOCK_AUTH?: string;
   FRONTEND_ORIGIN: string;
   NEXT_PUBLIC_SUPABASE_URL: string;
+  NEXT_PUBLIC_SUPABASE_ANON_KEY?: string;
   SUPABASE_SERVICE_ROLE_KEY: string;
   R2_ACCOUNT_ID?: string;
   R2_ACCESS_KEY_ID?: string;
@@ -190,7 +203,7 @@ const nonEmptyString = z.string().trim().min(1).max(500);
 const uuidSchema = z.string().uuid();
 
 const authorizationRequestSchema = z.object({
-  distributorName: nonEmptyString.max(80),
+  distributorName: nonEmptyString.max(80).optional(),
   socialAccount: nonEmptyString.max(120),
   platform: platformSchema,
   ipName: nonEmptyString.max(120),
@@ -219,7 +232,7 @@ const riskRecordSchema = z.object({
 });
 
 const accountBindingSchema = z.object({
-  distributorName: nonEmptyString.max(80),
+  distributorName: nonEmptyString.max(80).optional(),
   platform: platformSchema,
   accountName: nonEmptyString.max(120),
   homepageUrl: z.url().max(1000),
@@ -438,7 +451,76 @@ function isUserRole(value: string | null): value is UserRole {
   return Boolean(value && USER_ROLES.has(value as UserRole));
 }
 
-function readRequestSession(request: Request): RequestSession | null {
+function roleFromAppMetadata(appMetadata: Record<string, unknown> | undefined): UserRole {
+  const role = typeof appMetadata?.role === "string" ? appMetadata.role : undefined;
+  if (role === "operator") return "reviewer";
+  const candidate = role ?? null;
+  if (isUserRole(candidate)) return candidate;
+  return "partner";
+}
+
+function displayNameFromAuthUser(user: SupabaseAuthUser, role: UserRole) {
+  const appDisplayName = user.app_metadata?.display_name;
+  const profileDisplayName = user.user_metadata?.display_name;
+  const fullName = user.user_metadata?.full_name;
+  const name = user.user_metadata?.name;
+  return (
+    (typeof appDisplayName === "string" && appDisplayName.trim()) ||
+    (typeof profileDisplayName === "string" && profileDisplayName.trim()) ||
+    (typeof fullName === "string" && fullName.trim()) ||
+    (typeof name === "string" && name.trim()) ||
+    user.email ||
+    user.phone ||
+    (role === "partner" ? DEFAULT_DISTRIBUTOR_NAME : ROLE_LABELS[role])
+  );
+}
+
+function bearerToken(request: Request) {
+  const authorization = request.headers.get("authorization") ?? "";
+  const match = authorization.match(/^Bearer\s+(.+)$/i);
+  return match?.[1]?.trim() || null;
+}
+
+async function readSupabaseSession(env: WorkerEnv, request: Request): Promise<RequestSession | null> {
+  const token = bearerToken(request);
+  if (!token) return null;
+
+  if (!env.NEXT_PUBLIC_SUPABASE_URL || !env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
+    throw new ApiError("auth_not_configured", "Supabase Auth is not configured for token validation", 503);
+  }
+
+  const response = await fetch(`${env.NEXT_PUBLIC_SUPABASE_URL.replace(/\/$/, "")}/auth/v1/user`, {
+    headers: {
+      apikey: env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+      authorization: `Bearer ${token}`
+    }
+  });
+
+  if (response.status === 401 || response.status === 403) {
+    throw new ApiError("invalid_token", "Supabase access token is invalid or expired", 401);
+  }
+
+  if (!response.ok) {
+    throw new ApiError("auth_provider_error", "Supabase Auth token validation failed", 502, {
+      status: response.status
+    });
+  }
+
+  const user = (await response.json()) as SupabaseAuthUser;
+  const role = roleFromAppMetadata(user.app_metadata);
+
+  return {
+    id: user.id,
+    userId: user.id,
+    role,
+    displayName: displayNameFromAuthUser(user, role),
+    email: user.email,
+    provider: "supabase",
+    isMock: false
+  };
+}
+
+function readMockSession(request: Request): RequestSession | null {
   const role = request.headers.get("x-clip-role");
   if (!isUserRole(role)) return null;
 
@@ -446,13 +528,53 @@ function readRequestSession(request: Request): RequestSession | null {
     id: request.headers.get("x-clip-user-id")?.trim() || `mock-${role}`,
     role,
     displayName: request.headers.get("x-clip-display-name")?.trim() || ROLE_LABELS[role],
-    isMock: request.headers.get("x-clip-auth-provider") !== "supabase"
+    provider: "mock",
+    isMock: true
   };
 }
 
-function routeRoles(pathname: string): UserRole[] | null {
+async function readRequestSession(env: WorkerEnv, request: Request): Promise<RequestSession | null> {
+  return (await readSupabaseSession(env, request)) ?? readMockSession(request);
+}
+
+function routeRoles(pathname: string, method: string): UserRole[] | null {
   if (pathname === "/notifications" || /^\/notifications\/[^/]+\/read$/.test(pathname)) {
     return ["admin", "reviewer", "finance", "partner"];
+  }
+
+  if (method !== "GET") {
+    if (pathname === "/authorization-requests" || /^\/materials\/[^/]+\/claim$/.test(pathname)) {
+      return ["partner"];
+    }
+
+    if (pathname === "/account-bindings" || /^\/publish-records\/[^/]+\/submit$/.test(pathname)) {
+      return ["partner"];
+    }
+
+    if (/^\/authorization-requests\/[^/]+$/.test(pathname) || /^\/account-bindings\/[^/]+$/.test(pathname)) {
+      return ["admin", "reviewer"];
+    }
+
+    if (
+      pathname === "/materials" ||
+      pathname === "/products" ||
+      pathname === "/clip-tasks" ||
+      pathname === "/recordings/direct-upload/init" ||
+      pathname === "/recordings/direct-upload/complete" ||
+      pathname === "/recordings/upload" ||
+      pathname === "/risk-records" ||
+      /^\/materials\/[^/]+(\/product)?$/.test(pathname) ||
+      /^\/clip-tasks\/[^/]+(\/complete)?$/.test(pathname) ||
+      /^\/products\/[^/]+$/.test(pathname) ||
+      /^\/risk-records\/[^/]+$/.test(pathname) ||
+      /^\/publish-records\/[^/]+(\/performance)?$/.test(pathname)
+    ) {
+      return ["admin", "reviewer"];
+    }
+
+    if (pathname === "/state/reset" || pathname.startsWith("/settlements/") || pathname === "/settlements/generate") {
+      return ["admin", "finance"];
+    }
   }
 
   if (pathname.startsWith("/admin/settlements")) {
@@ -478,9 +600,9 @@ function allowMissingSessionForMockRead(env: WorkerEnv, request: Request) {
   return request.method === "GET" && (env.ALLOW_MOCK_AUTH === "true" || env.APP_ENV !== "production");
 }
 
-function authorizeRequest(request: Request, env: WorkerEnv, pathname: string) {
-  const allowedRoles = routeRoles(pathname);
-  const session = readRequestSession(request);
+async function authorizeRequest(request: Request, env: WorkerEnv, pathname: string) {
+  const allowedRoles = routeRoles(pathname, request.method);
+  const session = await readRequestSession(env, request);
 
   if (!allowedRoles) {
     return session;
@@ -500,6 +622,21 @@ function authorizeRequest(request: Request, env: WorkerEnv, pathname: string) {
   }
 
   return session;
+}
+
+function requireSession(session: RequestSession | null): RequestSession {
+  if (!session) {
+    throw new ApiError("unauthenticated", "A valid ClipPartner session is required", 401);
+  }
+  return session;
+}
+
+function requirePartnerSession(session: RequestSession | null): RequestSession {
+  const current = requireSession(session);
+  if (current.role !== "partner") {
+    throw new ApiError("forbidden", "This action requires a distributor session", 403);
+  }
+  return current;
 }
 
 function corsHeaders(env: WorkerEnv) {
@@ -771,15 +908,29 @@ function buildListQuery(select: string, order: string, options: ListOptions, fil
   return [select, order, rangeQuery(options), ...filters].filter(Boolean).join("&");
 }
 
-async function findOrCreateDistributor(env: WorkerEnv, displayName: string, phone = "Pending binding") {
-  const existing = await selectRows<{ id: string }>(
-    env,
-    "distributor_profiles",
-    `select=id&${eq("display_name", displayName)}&limit=1`
-  );
-  if (first(existing)) return first(existing);
+async function findOrCreateDistributor(
+  env: WorkerEnv,
+  displayName: string,
+  phone = "Pending binding",
+  options: { userId?: string } = {}
+) {
+  if (options.userId) {
+    const existingByUser = await selectRows<{ id: string }>(
+      env,
+      "distributor_profiles",
+      `select=id&user_id=eq.${options.userId}&limit=1`
+    );
+    if (first(existingByUser)) return first(existingByUser);
+  } else {
+    const existing = await selectRows<{ id: string }>(
+      env,
+      "distributor_profiles",
+      `select=id&${eq("display_name", displayName)}&limit=1`
+    );
+    if (first(existing)) return first(existing);
+  }
 
-  const userId = crypto.randomUUID();
+  const userId = options.userId ?? crypto.randomUUID();
   try {
     return await insertRow<{ id: string }>(env, "distributor_profiles", {
       user_id: userId,
@@ -800,6 +951,46 @@ async function findOrCreateDistributor(env: WorkerEnv, displayName: string, phon
       status: "approved"
     });
   }
+}
+
+async function findDistributorForSession(env: WorkerEnv, session: RequestSession | null) {
+  if (!session || session.role !== "partner") return null;
+  if (session.provider === "supabase" && session.userId) {
+    return first(
+      await safeRows(() =>
+        selectRows<{ id: string }>(env, "distributor_profiles", `select=id&user_id=eq.${session.userId}&limit=1`)
+      )
+    );
+  }
+
+  return first(
+    await safeRows(() =>
+      selectRows<{ id: string }>(
+        env,
+        "distributor_profiles",
+        `select=id&${eq("display_name", session.displayName)}&limit=1`
+      )
+    )
+  );
+}
+
+async function findOrCreateDistributorForSession(
+  env: WorkerEnv,
+  session: RequestSession | null,
+  fallbackName = DEFAULT_DISTRIBUTOR_NAME,
+  phone = "Pending binding"
+) {
+  if (session?.role === "partner") {
+    return findOrCreateDistributor(env, session.displayName || fallbackName, phone, {
+      userId: session.provider === "supabase" ? session.userId : undefined
+    });
+  }
+  return findOrCreateDistributor(env, fallbackName, phone);
+}
+
+async function distributorFilterForSession(env: WorkerEnv, session: RequestSession | null) {
+  const distributor = await findDistributorForSession(env, session);
+  return distributor ? filterParam("distributor_id", "eq", distributor.id) : filterParam("distributor_id", "eq", "00000000-0000-0000-0000-000000000000");
 }
 
 async function findOrCreateIp(env: WorkerEnv, name: string, platform: string) {
@@ -857,8 +1048,12 @@ async function createProduct(env: WorkerEnv, input: ProductInput) {
   });
 }
 
-async function createAuthorizationRequest(env: WorkerEnv, input: AuthorizationRequestInput) {
-  const distributor = await findOrCreateDistributor(env, input.distributorName);
+async function createAuthorizationRequest(env: WorkerEnv, input: AuthorizationRequestInput, session?: RequestSession | null) {
+  const distributor = await findOrCreateDistributorForSession(
+    env,
+    session ?? null,
+    input.distributorName ?? DEFAULT_DISTRIBUTOR_NAME
+  );
   const ip = await findOrCreateIp(env, input.ipName, input.platform);
   const social = await findOrCreateSocialAccount(env, distributor.id, input.socialAccount, input.platform);
 
@@ -871,8 +1066,12 @@ async function createAuthorizationRequest(env: WorkerEnv, input: AuthorizationRe
   });
 }
 
-async function createAccountBinding(env: WorkerEnv, input: AccountBindingInput) {
-  const distributor = await findOrCreateDistributor(env, input.distributorName);
+async function createAccountBinding(env: WorkerEnv, input: AccountBindingInput, session?: RequestSession | null) {
+  const distributor = await findOrCreateDistributorForSession(
+    env,
+    session ?? null,
+    input.distributorName ?? DEFAULT_DISTRIBUTOR_NAME
+  );
   const body = {
     distributor_id: distributor.id,
     platform: toPlatformValue(input.platform),
@@ -1185,7 +1384,12 @@ async function bindProductToMaterial(env: WorkerEnv, clipAssetId: string, produc
   });
 }
 
-async function claimMaterial(env: WorkerEnv, clipAssetId: string, distributorName = "Demo Distributor") {
+async function claimMaterial(
+  env: WorkerEnv,
+  clipAssetId: string,
+  distributorName = "Demo Distributor",
+  session?: RequestSession | null
+) {
   const clipRows = await selectRows<{
     id: string;
     title: string;
@@ -1210,7 +1414,7 @@ async function claimMaterial(env: WorkerEnv, clipAssetId: string, distributorNam
     throw new ApiError("invalid_product", "Clip asset must be bound to an active affiliate product before claiming", 422);
   }
 
-  const distributor = await findOrCreateDistributor(env, distributorName, "186****7108");
+  const distributor = await findOrCreateDistributorForSession(env, session ?? null, distributorName, "186****7108");
   const [authorizationRows, socialRows] = await Promise.all([
     selectRows<{ id: string }>(
       env,
@@ -2070,7 +2274,12 @@ async function listAuthorizationPools(env: WorkerEnv, options = listOptions(new 
   return { items, meta: listMeta(items, options) };
 }
 
-async function listFormalAuthorizations(env: WorkerEnv, options = listOptions(new URLSearchParams())) {
+async function listFormalAuthorizations(
+  env: WorkerEnv,
+  options = listOptions(new URLSearchParams()),
+  session?: RequestSession | null
+) {
+  const distributorFilter = session?.role === "partner" ? await distributorFilterForSession(env, session) : undefined;
   const rows = await safeRows(() =>
     selectRows<{
       id: string;
@@ -2091,7 +2300,7 @@ async function listFormalAuthorizations(env: WorkerEnv, options = listOptions(ne
         "select=id,status,share_rate,daily_claim_limit,starts_at,expires_at,paused_reason,distributor_profiles(display_name),social_accounts(account_name,platform),ip_accounts(name,platform),agreement_signatures(agreement_templates(version))",
         "order=created_at.desc",
         options,
-        [options.status ? filterParam("status", "eq", options.status) : undefined]
+        [options.status ? filterParam("status", "eq", options.status) : undefined, distributorFilter]
       )
     )
   );
@@ -2262,7 +2471,8 @@ async function listDistributionTasks(env: WorkerEnv, options = listOptions(new U
   return { items, meta: listMeta(items, options) };
 }
 
-async function listTaskClaims(env: WorkerEnv, options = listOptions(new URLSearchParams())) {
+async function listTaskClaims(env: WorkerEnv, options = listOptions(new URLSearchParams()), session?: RequestSession | null) {
+  const distributorFilter = session?.role === "partner" ? await distributorFilterForSession(env, session) : undefined;
   const rows = await safeRows(() =>
     selectRows<{
       id: string;
@@ -2283,7 +2493,7 @@ async function listTaskClaims(env: WorkerEnv, options = listOptions(new URLSearc
         "select=id,distribution_task_id,status,claim_token,submitted_url,claimed_at,distributor_profiles(display_name),social_accounts(account_name,platform),clip_assets(title),products(name),download_tokens(expires_at)",
         "order=claimed_at.desc",
         options,
-        [options.status ? filterParam("status", "eq", options.status) : undefined]
+        [options.status ? filterParam("status", "eq", options.status) : undefined, distributorFilter]
       )
     )
   );
@@ -2305,7 +2515,12 @@ async function listTaskClaims(env: WorkerEnv, options = listOptions(new URLSearc
   return { items, meta: listMeta(items, options) };
 }
 
-async function listWalletTransactions(env: WorkerEnv, options = listOptions(new URLSearchParams())) {
+async function listWalletTransactions(
+  env: WorkerEnv,
+  options = listOptions(new URLSearchParams()),
+  session?: RequestSession | null
+) {
+  const distributorFilter = session?.role === "partner" ? await distributorFilterForSession(env, session) : undefined;
   const rows = await safeRows(() =>
     selectRows<{
       id: string;
@@ -2323,7 +2538,7 @@ async function listWalletTransactions(env: WorkerEnv, options = listOptions(new 
         "select=id,type,amount,status,source,note,created_at,distributor_profiles(display_name)",
         "order=created_at.desc",
         options,
-        [options.status ? filterParam("status", "eq", options.status) : undefined]
+        [options.status ? filterParam("status", "eq", options.status) : undefined, distributorFilter]
       )
     )
   );
@@ -2367,8 +2582,8 @@ async function listNotifications(env: WorkerEnv, options = listOptions(new URLSe
   return { items, meta: listMeta(items, options) };
 }
 
-async function partnerWalletResponse(env: WorkerEnv, options = listOptions(new URLSearchParams())) {
-  const { items, meta } = await listWalletTransactions(env, options);
+async function partnerWalletResponse(env: WorkerEnv, options = listOptions(new URLSearchParams()), session?: RequestSession | null) {
+  const { items, meta } = await listWalletTransactions(env, options, session);
   const wallet = items.reduce(
     (summary, transaction) => {
       if (transaction.status === "available") summary.availableAmount += transaction.amount;
@@ -2384,8 +2599,13 @@ async function partnerWalletResponse(env: WorkerEnv, options = listOptions(new U
 }
 
 async function getMe(env: WorkerEnv, request: Request) {
-  const session = mockSession(readRequestSession(request) ?? undefined);
+  const requestSession = await readRequestSession(env, request);
+  const session = mockSession(requestSession ?? undefined);
   const distributorName = session.distributor?.displayName ?? DEFAULT_DISTRIBUTOR_NAME;
+  const profileFilter =
+    requestSession?.provider === "supabase" && requestSession.userId
+      ? `user_id=eq.${requestSession.userId}`
+      : eq("display_name", distributorName);
   const rows = await safeRows(() =>
     selectRows<{
       id: string;
@@ -2395,7 +2615,7 @@ async function getMe(env: WorkerEnv, request: Request) {
     }>(
       env,
       "distributor_profiles",
-      `select=id,display_name,onboarding_status,credit_score&${eq("display_name", distributorName)}&limit=1`
+      `select=id,display_name,onboarding_status,credit_score&${profileFilter}&limit=1`
     )
   );
   const profile = first(rows);
@@ -2411,7 +2631,7 @@ async function getMe(env: WorkerEnv, request: Request) {
         }
       : session.distributor,
     providers: {
-      authProvider: "mock",
+      authProvider: requestSession?.provider ?? "mock",
       videoProvider: "mock",
       platformDataProvider: "mock",
       paymentProvider: "manual",
@@ -2420,9 +2640,9 @@ async function getMe(env: WorkerEnv, request: Request) {
   };
 }
 
-async function upsertPartnerProfile(env: WorkerEnv, input: z.infer<typeof partnerProfileSchema>) {
-  const displayName = input.displayName ?? input.distributorName ?? DEFAULT_DISTRIBUTOR_NAME;
-  const distributor = await findOrCreateDistributor(env, displayName, input.phone || "Pending binding");
+async function upsertPartnerProfile(env: WorkerEnv, input: z.infer<typeof partnerProfileSchema>, session: RequestSession) {
+  const displayName = input.displayName ?? session.displayName ?? input.distributorName ?? DEFAULT_DISTRIBUTOR_NAME;
+  const distributor = await findOrCreateDistributorForSession(env, session, displayName, input.phone || "Pending binding");
   await patchRows(env, "distributor_profiles", `id=eq.${distributor.id}`, {
     display_name: displayName,
     phone: input.phone,
@@ -2432,8 +2652,8 @@ async function upsertPartnerProfile(env: WorkerEnv, input: z.infer<typeof partne
   });
 }
 
-async function recordPartnerExamAttempt(env: WorkerEnv, input: z.infer<typeof examAttemptSchema>) {
-  const distributor = await findOrCreateDistributor(env, input.distributorName ?? DEFAULT_DISTRIBUTOR_NAME, "186****7108");
+async function recordPartnerExamAttempt(env: WorkerEnv, input: z.infer<typeof examAttemptSchema>, session: RequestSession) {
+  const distributor = await findOrCreateDistributorForSession(env, session, input.distributorName ?? DEFAULT_DISTRIBUTOR_NAME, "186****7108");
   const passed = input.score >= 80;
   await insertRow(env, "exam_attempts", {
     distributor_id: distributor.id,
@@ -2464,8 +2684,8 @@ async function findOrCreateAgreementTemplate(env: WorkerEnv, name: string, versi
   });
 }
 
-async function signPartnerAgreement(env: WorkerEnv, input: z.infer<typeof agreementSignSchema>, request: Request) {
-  const distributor = await findOrCreateDistributor(env, input.distributorName ?? DEFAULT_DISTRIBUTOR_NAME, "186****7108");
+async function signPartnerAgreement(env: WorkerEnv, input: z.infer<typeof agreementSignSchema>, request: Request, session: RequestSession) {
+  const distributor = await findOrCreateDistributorForSession(env, session, input.distributorName ?? DEFAULT_DISTRIBUTOR_NAME, "186****7108");
   const template = await findOrCreateAgreementTemplate(
     env,
     input.templateName ?? DEFAULT_AGREEMENT_NAME,
@@ -2606,7 +2826,13 @@ async function updateDistributionTask(env: WorkerEnv, id: string, input: z.infer
   await patchRows(env, "distribution_tasks", `id=eq.${id}`, { status: input.status });
 }
 
-async function claimDistributionTask(env: WorkerEnv, taskId: string, input: z.infer<typeof taskClaimSchema>, request: Request) {
+async function claimDistributionTask(
+  env: WorkerEnv,
+  taskId: string,
+  input: z.infer<typeof taskClaimSchema>,
+  request: Request,
+  session: RequestSession
+) {
   const taskRows = await selectRows<{
     id: string;
     title: string;
@@ -2639,7 +2865,7 @@ async function claimDistributionTask(env: WorkerEnv, taskId: string, input: z.in
   );
   if (!isUsableProduct(product)) throw new ApiError("product_disabled", "Product is disabled or invalid", 422);
 
-  const distributor = await findOrCreateDistributor(env, input.distributorName ?? DEFAULT_DISTRIBUTOR_NAME, "186****7108");
+  const distributor = await findOrCreateDistributorForSession(env, session, input.distributorName ?? DEFAULT_DISTRIBUTOR_NAME, "186****7108");
   const profile = first(
     await selectRows<{
       id: string;
@@ -2826,8 +3052,8 @@ async function submitTaskClaim(env: WorkerEnv, claimId: string, input: z.infer<t
   }
 }
 
-async function createWalletTransaction(env: WorkerEnv, input: z.infer<typeof walletTransactionSchema>) {
-  const distributor = await findOrCreateDistributor(env, input.distributorName ?? DEFAULT_DISTRIBUTOR_NAME, "186****7108");
+async function createWalletTransaction(env: WorkerEnv, input: z.infer<typeof walletTransactionSchema>, session: RequestSession) {
+  const distributor = await findOrCreateDistributorForSession(env, session, input.distributorName ?? DEFAULT_DISTRIBUTOR_NAME, "186****7108");
   await insertRow(env, "wallet_transactions", {
     distributor_id: distributor.id,
     type: input.type,
@@ -2920,8 +3146,8 @@ async function applyRiskAction(env: WorkerEnv, riskEventId: string, input: z.inf
   }
 }
 
-async function createAppeal(env: WorkerEnv, input: z.infer<typeof appealSchema>) {
-  const distributor = await findOrCreateDistributor(env, input.distributorName ?? DEFAULT_DISTRIBUTOR_NAME, "186****7108");
+async function createAppeal(env: WorkerEnv, input: z.infer<typeof appealSchema>, session: RequestSession) {
+  const distributor = await findOrCreateDistributorForSession(env, session, input.distributorName ?? DEFAULT_DISTRIBUTOR_NAME, "186****7108");
   await insertRow(env, "appeals", {
     distributor_id: distributor.id,
     risk_event_id: input.riskEventId,
@@ -2930,10 +3156,10 @@ async function createAppeal(env: WorkerEnv, input: z.infer<typeof appealSchema>)
   });
 }
 
-async function markNotificationRead(env: WorkerEnv, notificationId: string) {
+async function markNotificationRead(env: WorkerEnv, notificationId: string, session?: RequestSession | null) {
   await insertRow(env, "notification_reads", {
     notification_id: notificationId,
-    user_id: MOCK_USER_ID
+    user_id: session?.provider === "supabase" && session.userId ? session.userId : MOCK_USER_ID
   }).catch(() => undefined);
 }
 
@@ -3121,7 +3347,7 @@ const worker = {
         return json(await getMe(env, request), env);
       }
 
-      authorizeRequest(request, env, url.pathname);
+      const requestSession = await authorizeRequest(request, env, url.pathname);
 
       if (url.pathname === "/admin/distributors" && request.method === "GET") {
         const { items, meta } = await listDistributors(env, listOptions(url.searchParams));
@@ -3129,17 +3355,17 @@ const worker = {
       }
 
       if (url.pathname === "/partner/profile" && request.method === "POST") {
-        await upsertPartnerProfile(env, await readJson(request, partnerProfileSchema));
+        await upsertPartnerProfile(env, await readJson(request, partnerProfileSchema), requirePartnerSession(requestSession));
         return json(await listState(env), env);
       }
 
       if (url.pathname === "/partner/exam-attempts" && request.method === "POST") {
-        await recordPartnerExamAttempt(env, await readJson(request, examAttemptSchema));
+        await recordPartnerExamAttempt(env, await readJson(request, examAttemptSchema), requirePartnerSession(requestSession));
         return json(await listState(env), env, { status: 201 });
       }
 
       if (url.pathname === "/partner/agreements/sign" && request.method === "POST") {
-        await signPartnerAgreement(env, await readJson(request, agreementSignSchema), request);
+        await signPartnerAgreement(env, await readJson(request, agreementSignSchema), request, requirePartnerSession(requestSession));
         return json(await listState(env), env, { status: 201 });
       }
 
@@ -3155,7 +3381,7 @@ const worker = {
       if (url.pathname === "/partner/authorizations" && request.method === "GET") {
         const options = listOptions(url.searchParams);
         const [formalAuthorizations, authorizationPools] = await Promise.all([
-          listFormalAuthorizations(env, options),
+          listFormalAuthorizations(env, options, requestSession),
           listAuthorizationPools(env, options)
         ]);
         return json(
@@ -3209,14 +3435,20 @@ const worker = {
         const options = listOptions(url.searchParams);
         const [distributionTasks, taskClaims] = await Promise.all([
           listDistributionTasks(env, { ...options, status: options.status ?? "open" }),
-          listTaskClaims(env, options)
+          listTaskClaims(env, options, requestSession)
         ]);
         return json({ distributionTasks: distributionTasks.items, taskClaims: taskClaims.items, meta: distributionTasks.meta }, env);
       }
 
       const partnerTaskClaimMatch = url.pathname.match(/^\/partner\/tasks\/([^/]+)\/claim$/);
       if (partnerTaskClaimMatch && request.method === "POST") {
-        await claimDistributionTask(env, partnerTaskClaimMatch[1], await readJson(request, taskClaimSchema), request);
+        await claimDistributionTask(
+          env,
+          partnerTaskClaimMatch[1],
+          await readJson(request, taskClaimSchema),
+          request,
+          requirePartnerSession(requestSession)
+        );
         return json(await listState(env), env, { status: 201 });
       }
 
@@ -3233,11 +3465,11 @@ const worker = {
       }
 
       if (url.pathname === "/partner/wallet" && request.method === "GET") {
-        return json(await partnerWalletResponse(env, listOptions(url.searchParams)), env);
+        return json(await partnerWalletResponse(env, listOptions(url.searchParams), requestSession), env);
       }
 
       if (url.pathname === "/partner/wallet/transactions" && request.method === "POST") {
-        await createWalletTransaction(env, await readJson(request, walletTransactionSchema));
+        await createWalletTransaction(env, await readJson(request, walletTransactionSchema), requirePartnerSession(requestSession));
         return json(await listState(env), env, { status: 201 });
       }
 
@@ -3253,7 +3485,7 @@ const worker = {
       }
 
       if (url.pathname === "/partner/appeals" && request.method === "POST") {
-        await createAppeal(env, await readJson(request, appealSchema));
+        await createAppeal(env, await readJson(request, appealSchema), requirePartnerSession(requestSession));
         return json(await listState(env), env, { status: 201 });
       }
 
@@ -3264,7 +3496,7 @@ const worker = {
 
       const notificationReadMatch = url.pathname.match(/^\/notifications\/([^/]+)\/read$/);
       if (notificationReadMatch && request.method === "POST") {
-        await markNotificationRead(env, notificationReadMatch[1]);
+        await markNotificationRead(env, notificationReadMatch[1], requireSession(requestSession));
         return json(await listState(env), env);
       }
 
@@ -3343,12 +3575,12 @@ const worker = {
       }
 
       if (url.pathname === "/authorization-requests" && request.method === "POST") {
-        await createAuthorizationRequest(env, await readJson(request, authorizationRequestSchema));
+        await createAuthorizationRequest(env, await readJson(request, authorizationRequestSchema), requirePartnerSession(requestSession));
         return json(await listState(env), env, { status: 201 });
       }
 
       if (url.pathname === "/account-bindings" && request.method === "POST") {
-        await createAccountBinding(env, await readJson(request, accountBindingSchema));
+        await createAccountBinding(env, await readJson(request, accountBindingSchema), requirePartnerSession(requestSession));
         return json(await listState(env), env, { status: 201 });
       }
 
@@ -3494,7 +3726,7 @@ const worker = {
       const claimMatch = url.pathname.match(/^\/materials\/([^/]+)\/claim$/);
       if (claimMatch && request.method === "POST") {
         const body = await readJson(request, claimSchema);
-        await claimMaterial(env, claimMatch[1], body.distributorName);
+        await claimMaterial(env, claimMatch[1], body.distributorName, requirePartnerSession(requestSession));
         return json(await listState(env), env, { status: 201 });
       }
 
