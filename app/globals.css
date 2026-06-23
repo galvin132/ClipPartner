@@ -600,6 +600,216 @@ textarea {
   font-size: 26px;
 }
 
+.growth-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(320px, 0.7fr);
+  gap: 18px;
+  margin-bottom: 18px;
+  padding: 22px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background:
+    linear-gradient(120deg, rgba(15, 139, 105, 0.12), rgba(232, 143, 42, 0.12)),
+    #ffffff;
+  box-shadow: var(--shadow);
+}
+
+.growth-hero-copy {
+  display: grid;
+  align-content: center;
+  gap: 14px;
+}
+
+.growth-hero-copy h2,
+.partner-earnings-hero h1 {
+  margin: 0;
+  max-width: 760px;
+  font-size: 34px;
+  line-height: 1.16;
+}
+
+.growth-hero-copy p,
+.partner-earnings-hero p {
+  margin: 0;
+  max-width: 780px;
+  color: var(--muted);
+  line-height: 1.65;
+}
+
+.growth-proof-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  max-width: 820px;
+}
+
+.growth-proof-grid div {
+  min-height: 82px;
+  border: 1px solid rgba(15, 139, 105, 0.18);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.76);
+  padding: 12px;
+  display: grid;
+  align-content: center;
+  gap: 5px;
+}
+
+.growth-proof-grid strong {
+  font-size: 18px;
+}
+
+.growth-proof-grid span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.growth-hero-panel,
+.partner-earnings-panel {
+  min-height: 250px;
+  border-radius: 8px;
+  background: #15211d;
+  color: #ffffff;
+  padding: 20px;
+  display: grid;
+  align-content: center;
+  gap: 12px;
+}
+
+.hero-panel-label,
+.partner-earnings-panel span {
+  color: #a9b8b2;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.hero-panel-value,
+.partner-earnings-panel strong {
+  font-size: 42px;
+  line-height: 1.05;
+  font-weight: 900;
+}
+
+.hero-panel-subtitle,
+.partner-earnings-panel p {
+  color: #c9d5d0;
+}
+
+.growth-metrics {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.section-heading-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.section-heading-row .section-title {
+  margin: 0;
+}
+
+.rank-list {
+  display: grid;
+  gap: 10px;
+}
+
+.rank-row {
+  min-height: 66px;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #ffffff;
+}
+
+.rank-row:hover {
+  border-color: rgba(15, 139, 105, 0.45);
+  box-shadow: var(--shadow);
+}
+
+.rank-index {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #fff7ed;
+  color: var(--accent);
+  font-weight: 900;
+}
+
+.rank-title {
+  font-weight: 800;
+}
+
+.rank-meta {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.rank-value {
+  font-weight: 900;
+  color: var(--brand-dark);
+  white-space: nowrap;
+}
+
+.value-stack {
+  display: grid;
+  gap: 10px;
+}
+
+.value-stack div {
+  min-height: 76px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 4px 10px;
+}
+
+.value-stack svg {
+  color: var(--brand);
+  grid-row: span 2;
+  margin-top: 2px;
+}
+
+.value-stack strong {
+  font-size: 15px;
+}
+
+.value-stack span {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.partner-earnings-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(300px, 0.75fr);
+  gap: 18px;
+  align-items: stretch;
+  margin-bottom: 18px;
+  padding: 22px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: var(--shadow);
+}
+
+.partner-earnings-hero > div:first-child {
+  display: grid;
+  align-content: center;
+  gap: 14px;
+}
+
 .product-bind-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -662,10 +872,61 @@ textarea {
   padding: 24px;
 }
 
+.sales-login-shell {
+  align-items: stretch;
+}
+
+.sales-login-panel {
+  display: grid;
+  align-content: start;
+  gap: 18px;
+  overflow: hidden;
+}
+
+.login-visual {
+  min-height: 180px;
+  margin: -24px -24px 4px;
+  background:
+    linear-gradient(120deg, rgba(21, 33, 29, 0.82), rgba(15, 139, 105, 0.48)),
+    url("https://images.unsplash.com/photo-1556761175-b413da4baf72?auto=format&fit=crop&w=1200&q=80");
+  background-size: cover;
+  background-position: center;
+}
+
 .login-title {
   margin: 0;
   font-size: 34px;
   line-height: 1.15;
+}
+
+.login-value-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.login-value-grid div {
+  min-height: 116px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  display: grid;
+  align-content: start;
+  gap: 8px;
+}
+
+.login-value-grid svg {
+  color: var(--brand);
+}
+
+.login-value-grid strong {
+  font-size: 15px;
+}
+
+.login-value-grid span {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 .login-form {
@@ -751,6 +1012,11 @@ textarea {
   .detail-grid,
   .product-bind-grid,
   .settings-grid,
+  .growth-hero,
+  .growth-metrics,
+  .growth-proof-grid,
+  .partner-earnings-hero,
+  .login-value-grid,
   .analytics-grid {
     grid-template-columns: 1fr;
   }

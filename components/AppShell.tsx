@@ -7,12 +7,13 @@ import {
   Boxes,
   ClipboardList,
   Coins,
+  Crown,
   Goal,
+  LayoutDashboard,
+  LogOut,
   Package,
   Scissors,
   Settings,
-  LayoutDashboard,
-  LogOut,
   ShieldAlert,
   UserCircle2,
   UserRoundCheck
@@ -23,7 +24,8 @@ import { useAuth } from "@/components/AuthProvider";
 import { canAccessPath } from "@/lib/auth";
 
 const navItems = [
-  { href: "/", label: "运营工作台", icon: LayoutDashboard },
+  { href: "/", label: "赚钱大屏", icon: LayoutDashboard },
+  { href: "/admin/ip-talents", label: "IP达人管理", icon: Crown },
   { href: "/admin/distributors", label: "分发者管理", icon: UserCircle2 },
   { href: "/admin/authorization-pools", label: "授权池", icon: Goal },
   { href: "/admin/authorizations", label: "授权审核", icon: BadgeCheck },
@@ -61,7 +63,7 @@ export function AppShell({
         <aside className="sidebar">
           <div className="brand-block">
             <div className="brand-title">ClipPartner</div>
-            <div className="brand-subtitle">自有 IP 直播切片授权分发系统</div>
+            <div className="brand-subtitle">直播切片分销增长系统</div>
           </div>
           <nav className="nav-group" aria-label="主导航">
             {visibleNavItems.map((item) => {

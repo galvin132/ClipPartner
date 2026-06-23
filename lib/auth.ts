@@ -24,16 +24,16 @@ export const mockUsers: MockUser[] = [
     displayName: "平台管理员",
     role: "admin",
     roleLabel: "管理员",
-    description: "可访问全部后台、配置、分发者前台预览。"
+    description: "查看赚钱大屏、IP达人、分发者、素材、任务、风控和结算全链路。"
   },
   {
     id: "user-reviewer",
     username: "reviewer",
     password: "reviewer123",
-    displayName: "审核员",
+    displayName: "运营审核",
     role: "reviewer",
     roleLabel: "审核员",
-    description: "负责授权审核、素材管理、发布核验和风控处理。"
+    description: "负责授权审核、素材上架、发布核验、风险处理和IP达人表现追踪。"
   },
   {
     id: "user-finance",
@@ -42,7 +42,7 @@ export const mockUsers: MockUser[] = [
     displayName: "财务",
     role: "finance",
     roleLabel: "财务",
-    description: "负责查看发布数据、生成结算单和标记打款。"
+    description: "查看成交作品、生成结算单、确认佣金、处理打款和冻结记录。"
   },
   {
     id: "user-partner",
@@ -51,7 +51,7 @@ export const mockUsers: MockUser[] = [
     displayName: "周婧",
     role: "partner",
     roleLabel: "分发者",
-    description: "测试分发者前台，领取素材、回填作品链接、查看结算。"
+    description: "查看自己的收益、排名、授权、待回填作品、可领取任务和钱包流水。"
   }
 ];
 
@@ -59,6 +59,7 @@ const routePermissions: Record<UserRole, string[]> = {
   admin: ["*"],
   reviewer: [
     "/",
+    "/admin/ip-talents",
     "/admin/authorizations",
     "/admin/authorization-pools",
     "/admin/distributors",
