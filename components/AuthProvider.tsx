@@ -7,9 +7,9 @@ import { createAuthProvider } from "@/lib/providers/auth-provider";
 type AuthContextValue = {
   session: AuthSession | null;
   isHydrated: boolean;
-  login: (username: string, password: string) => AuthSession | null;
-  loginAs: (username: string) => AuthSession | null;
-  logout: () => void;
+  login: (username: string, password: string) => Promise<AuthSession | null>;
+  loginAs: (username: string) => Promise<AuthSession | null>;
+  logout: () => Promise<void>;
   defaultPath: string;
   hasRole: (roles: UserRole[]) => boolean;
 };
@@ -22,12 +22,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const provider = useMemo(() => createAuthProvider(), []);
 
   useEffect(() => {
+    let isActive = true;
     const timer = window.setTimeout(() => {
-      setSession(provider.getStoredSession());
-      setIsHydrated(true);
+      void Promise.resolve(provider.getStoredSession()).then((storedSession) => {
+        if (!isActive) return;
+        setSession(storedSession);
+        setIsHydrated(true);
+      });
     }, 0);
 
-    return () => window.clearTimeout(timer);
+    return () => {
+      isActive = false;
+      window.clearTimeout(timer);
+    };
   }, [provider]);
 
   const value = useMemo<AuthContextValue>(() => {
@@ -39,14 +46,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return {
       session,
       isHydrated,
-      login(username, password) {
-        return setCurrentSession(provider.login(username, password));
+      async login(username, password) {
+        return setCurrentSession(await provider.login(username, password));
       },
-      loginAs(username) {
-        return setCurrentSession(provider.loginAs(username));
+      async loginAs(username) {
+        return setCurrentSession(await provider.loginAs(username));
       },
-      logout() {
-        provider.logout();
+      async logout() {
+        await provider.logout();
         setCurrentSession(null);
       },
       defaultPath: session ? getDefaultPath(session.role) : "/login",

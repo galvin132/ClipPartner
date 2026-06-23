@@ -12,6 +12,7 @@ export default function LoginPage() {
   const [username, setUsername] = useState("admin");
   const [password, setPassword] = useState("admin123");
   const [error, setError] = useState("");
+  const isMockLoginEnabled = process.env.NEXT_PUBLIC_RUNTIME_MODE !== "real";
   const nextPath = useMemo(() => {
     if (typeof window === "undefined") return "";
     return new URLSearchParams(window.location.search).get("next") || "";
@@ -27,9 +28,9 @@ export default function LoginPage() {
     router.replace(nextPath || getDefaultPath(nextSession.role));
   }
 
-  function submitLogin(event: React.FormEvent<HTMLFormElement>) {
+  async function submitLogin(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const nextSession = login(username, password);
+    const nextSession = await login(username, password);
     if (!nextSession) {
       setError("账号或密码不正确，请使用右侧预置演示账号。");
       return;
@@ -38,8 +39,8 @@ export default function LoginPage() {
     goAfterLogin(nextSession);
   }
 
-  function quickLogin(usernameValue: string) {
-    const nextSession = loginAs(usernameValue);
+  async function quickLogin(usernameValue: string) {
+    const nextSession = await loginAs(usernameValue);
     if (nextSession) {
       setError("");
       goAfterLogin(nextSession);
@@ -97,6 +98,7 @@ export default function LoginPage() {
         </form>
       </section>
 
+      {isMockLoginEnabled ? (
       <section className="login-panel">
         <div className="table-header compact">
           <h2 className="table-title">演示账号</h2>
@@ -117,6 +119,7 @@ export default function LoginPage() {
           ))}
         </div>
       </section>
+      ) : null}
     </main>
   );
 }

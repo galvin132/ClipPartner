@@ -10,6 +10,7 @@ import {
   taskClaimOwnershipFilter,
   type UserRole
 } from "./auth-policy.ts";
+import { handleBetterAuthRequest } from "./better-auth.ts";
 import { createApiApp } from "./http-app.ts";
 
 type PlatformValue = "douyin" | "wechat_channels";
@@ -43,7 +44,7 @@ type DistributionTaskStatus = "draft" | "open" | "paused" | "closed";
 type TaskClaimStatus = "claimed" | "downloaded" | "submitted" | "overdue" | "verified" | "invalid" | "settled";
 type WalletTransactionType = "commission" | "adjustment" | "freeze" | "payout";
 type WalletTransactionStatus = "available" | "frozen" | "pending" | "paid";
-type SessionProvider = "mock" | "supabase";
+type SessionProvider = "mock" | "supabase" | "better-auth";
 
 type RequestSession = {
   id: string;
@@ -61,6 +62,20 @@ type SupabaseAuthUser = {
   phone?: string;
   app_metadata?: Record<string, unknown>;
   user_metadata?: Record<string, unknown>;
+};
+
+type BetterAuthSessionResponse = {
+  session?: {
+    id?: unknown;
+    token?: unknown;
+    userId?: unknown;
+  } | null;
+  user?: {
+    id?: unknown;
+    name?: unknown;
+    email?: unknown;
+    role?: unknown;
+  } | null;
 };
 
 const ROLE_LABELS: Record<UserRole, string> = {
@@ -176,6 +191,8 @@ export type WorkerEnv = Cloudflare.Env & {
   FRONTEND_ORIGIN: string;
   BETTER_AUTH_SECRET?: string;
   BETTER_AUTH_URL?: string;
+  BETTER_AUTH_DATABASE_URL?: string;
+  HYPERDRIVE?: Hyperdrive;
   NEXT_PUBLIC_SUPABASE_URL: string;
   NEXT_PUBLIC_SUPABASE_ANON_KEY?: string;
   SUPABASE_SERVICE_ROLE_KEY: string;
@@ -488,6 +505,56 @@ function bearerToken(request: Request) {
   return match?.[1]?.trim() || null;
 }
 
+function roleFromBetterAuthUser(user: BetterAuthSessionResponse["user"]): UserRole {
+  const role = typeof user?.role === "string" ? user.role : undefined;
+  if (role === "operator") return "reviewer";
+  const candidate = role ?? null;
+  if (isUserRole(candidate)) return candidate;
+  return "partner";
+}
+
+function displayNameFromBetterAuthUser(user: BetterAuthSessionResponse["user"], role: UserRole) {
+  return (
+    (typeof user?.name === "string" && user.name.trim()) ||
+    (typeof user?.email === "string" && user.email.trim()) ||
+    (role === "partner" ? DEFAULT_DISTRIBUTOR_NAME : ROLE_LABELS[role])
+  );
+}
+
+async function readBetterAuthSession(env: WorkerEnv, request: Request): Promise<RequestSession | null> {
+  const token = bearerToken(request);
+  const cookie = request.headers.get("cookie");
+  if (!token && !cookie) return null;
+
+  const sessionUrl = new URL("/api/auth/get-session", request.url);
+  const headers = new Headers();
+  if (token) headers.set("authorization", `Bearer ${token}`);
+  if (cookie) headers.set("cookie", cookie);
+
+  const response = await handleBetterAuthRequest(new Request(sessionUrl, { headers }), env);
+  if (response.status === 401 || response.status === 403) return null;
+  if (!response.ok) {
+    if (response.status === 503) return null;
+    throw new ApiError("auth_provider_error", "Better Auth session validation failed", 502, {
+      status: response.status
+    });
+  }
+
+  const payload = (await response.json()) as BetterAuthSessionResponse | null;
+  if (!payload?.session || !payload.user || typeof payload.user.id !== "string") return null;
+
+  const role = roleFromBetterAuthUser(payload.user);
+  return {
+    id: typeof payload.session.id === "string" ? payload.session.id : payload.user.id,
+    userId: payload.user.id,
+    role,
+    displayName: displayNameFromBetterAuthUser(payload.user, role),
+    email: typeof payload.user.email === "string" ? payload.user.email : undefined,
+    provider: "better-auth",
+    isMock: false
+  };
+}
+
 async function readSupabaseSession(env: WorkerEnv, request: Request): Promise<RequestSession | null> {
   const token = bearerToken(request);
   if (!token) return null;
@@ -543,7 +610,11 @@ function readMockSession(request: Request): RequestSession | null {
 }
 
 async function readRequestSession(env: WorkerEnv, request: Request): Promise<RequestSession | null> {
-  return (await readSupabaseSession(env, request)) ?? (isMockAuthAllowed(env) ? readMockSession(request) : null);
+  return (
+    (await readBetterAuthSession(env, request)) ??
+    (await readSupabaseSession(env, request)) ??
+    (isMockAuthAllowed(env) ? readMockSession(request) : null)
+  );
 }
 
 async function authorizeRequest(request: Request, env: WorkerEnv, pathname: string) {
@@ -909,6 +980,22 @@ async function findDistributorForSession(env: WorkerEnv, session: RequestSession
     );
   }
 
+  if (session.provider === "better-auth" && session.userId) {
+    const userId = session.userId;
+    const profileLink = first(
+      await safeRows(() =>
+        selectRows<{ distributor_profile_id: string | null }>(
+          env,
+          "app_user_profiles",
+          `select=distributor_profile_id&better_auth_user_id=eq.${encodeURIComponent(userId)}&limit=1`
+        )
+      )
+    );
+    if (profileLink?.distributor_profile_id) {
+      return { id: profileLink.distributor_profile_id };
+    }
+  }
+
   return first(
     await safeRows(() =>
       selectRows<{ id: string }>(
@@ -920,6 +1007,38 @@ async function findDistributorForSession(env: WorkerEnv, session: RequestSession
   );
 }
 
+async function linkBetterAuthUserProfile(env: WorkerEnv, session: RequestSession, distributorId: string) {
+  if (session.provider !== "better-auth" || !session.userId) return;
+  const body = {
+    role: session.role,
+    distributor_profile_id: distributorId,
+    display_name: session.displayName,
+    email: session.email ?? null,
+    status: "active"
+  };
+
+  try {
+    const existing = first(
+      await selectRows<{ better_auth_user_id: string }>(
+        env,
+        "app_user_profiles",
+        `select=better_auth_user_id&better_auth_user_id=eq.${encodeURIComponent(session.userId)}&limit=1`
+      )
+    );
+    if (existing) {
+      await patchRows(env, "app_user_profiles", `better_auth_user_id=eq.${encodeURIComponent(session.userId)}`, body);
+      return;
+    }
+    await insertRow(env, "app_user_profiles", {
+      better_auth_user_id: session.userId,
+      ...body
+    });
+  } catch {
+    // The mapping table is added by a new migration; local/demo data can still
+    // fall back to display-name lookup before the migration is applied.
+  }
+}
+
 async function findOrCreateDistributorForSession(
   env: WorkerEnv,
   session: RequestSession | null,
@@ -927,9 +1046,11 @@ async function findOrCreateDistributorForSession(
   phone = "Pending binding"
 ) {
   if (session?.role === "partner") {
-    return findOrCreateDistributor(env, session.displayName || fallbackName, phone, {
+    const distributor = await findOrCreateDistributor(env, session.displayName || fallbackName, phone, {
       userId: session.provider === "supabase" ? session.userId : undefined
     });
+    await linkBetterAuthUserProfile(env, session, distributor.id);
+    return distributor;
   }
   return findOrCreateDistributor(env, fallbackName, phone);
 }
@@ -2556,8 +2677,12 @@ async function getMe(env: WorkerEnv, request: Request) {
   const requestSession = await readRequestSession(env, request);
   const session = mockSession(requestSession ?? undefined);
   const distributorName = session.distributor?.displayName ?? DEFAULT_DISTRIBUTOR_NAME;
+  const linkedDistributor =
+    requestSession?.provider === "better-auth" ? await findDistributorForSession(env, requestSession) : null;
   const profileFilter =
-    requestSession?.provider === "supabase" && requestSession.userId
+    linkedDistributor?.id
+      ? `id=eq.${linkedDistributor.id}`
+      : requestSession?.provider === "supabase" && requestSession.userId
       ? `user_id=eq.${requestSession.userId}`
       : eq("display_name", distributorName);
   const rows = await safeRows(() =>
@@ -3215,6 +3340,7 @@ async function readBody<T>(request: Request) {
 function mockSession(session?: RequestSession) {
   const role = session?.role ?? "partner";
   const displayName = session?.displayName || (role === "partner" ? DEFAULT_DISTRIBUTOR_NAME : ROLE_LABELS[role]);
+  const authProvider = session?.provider ?? "mock";
   const distributor =
     role === "partner"
       ? {
@@ -3234,7 +3360,7 @@ function mockSession(session?: RequestSession) {
     },
     distributor,
     providers: {
-      authProvider: session?.isMock === false ? "supabase" : "mock",
+      authProvider,
       videoProvider: "mock",
       platformDataProvider: "mock",
       paymentProvider: "manual"

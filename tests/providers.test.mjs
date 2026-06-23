@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createAuthProvider, createMockAuthProvider } from "../lib/providers/auth-provider.ts";
+import { createAuthProvider, createBetterAuthProvider, createMockAuthProvider } from "../lib/providers/auth-provider.ts";
 import { createProviderAdapters } from "../lib/providers/index.ts";
 import { getRuntimeMode, parseRuntimeMode } from "../lib/providers/runtime.ts";
 import { createMockPaymentProvider, createPaymentProvider } from "../lib/providers/payment-provider.ts";
@@ -48,13 +48,56 @@ test("mock auth provider accepts demo users and rejects wrong passwords", () => 
   assert.equal(provider.getStoredSession(), null);
 });
 
-test("auth provider factory keeps mock login out of real mode", () => {
+test("auth provider factory keeps mock login out of real mode", async () => {
   const storage = memoryStorage();
   const provider = createAuthProvider("real", storage);
 
-  assert.equal(provider.login("admin", "admin123"), null);
-  assert.equal(provider.loginAs("admin"), null);
-  assert.equal(provider.getStoredSession(), null);
+  assert.equal(await provider.login("admin", "admin123"), null);
+  assert.equal(await provider.loginAs("admin"), null);
+  assert.equal(await provider.getStoredSession(), null);
+});
+
+test("real Better Auth provider stores server-issued bearer sessions", async () => {
+  const storage = memoryStorage();
+  const calls = [];
+  const provider = createBetterAuthProvider(storage, {
+    apiBaseUrl: "https://api.test",
+    fetcher: async (input, init) => {
+      calls.push({ input: String(input), init });
+      if (String(input).endsWith("/api/auth/sign-in/email")) {
+        return Response.json({
+          token: "better-token",
+          user: {
+            id: "user-1",
+            name: "Partner User",
+            email: "partner@example.test",
+            role: "partner"
+          }
+        });
+      }
+      if (String(input).endsWith("/api/auth/get-session")) {
+        return Response.json({
+          session: { token: "better-token" },
+          user: {
+            id: "user-1",
+            name: "Partner User",
+            email: "partner@example.test",
+            role: "partner"
+          }
+        });
+      }
+      return Response.json(null);
+    }
+  });
+
+  const session = await provider.login("partner@example.test", "password1234");
+
+  assert.equal(session?.authProvider, "better-auth");
+  assert.equal(session?.accessToken, "better-token");
+  assert.equal(session?.role, "partner");
+  assert.equal((await provider.getStoredSession())?.accessToken, "better-token");
+  assert.equal(calls[0].input, "https://api.test/api/auth/sign-in/email");
+  assert.equal(calls[1].init.headers.authorization, "Bearer better-token");
 });
 
 test("mock platform provider verifies valid urls and rejects empty or risk urls", async () => {

@@ -1,72 +1,50 @@
-# ClipPartner 线上部署配置
+# ClipPartner 部署说明
 
 ## 目标架构
 
 | 部分 | 服务 |
 | --- | --- |
-| 前台 / 后台页面 | Vercel，使用项目默认域名 `*.vercel.app` |
-| API 服务 | Cloudflare Workers |
-| 数据库 / Auth | Supabase |
-| 文件存储 | Cloudflare R2 |
-| 异步任务 | Cloudflare Queues |
-| 定时任务 | Cloudflare Cron Triggers |
-| 视频处理 | 独立 FFmpeg 服务，先通过 Worker 调用 |
+| Web 后台 | Vercel / Next.js |
+| API | Cloudflare Workers |
+| 认证 | Better Auth inside Worker |
+| 数据库 | Supabase Postgres |
+| DB 连接池 | Cloudflare Hyperdrive |
+| 文件 | Cloudflare R2 |
+| 异步任务 | Cloudflare Queues + Cron |
 
-## 需要注册的账号
+## Vercel
 
-1. Vercel：部署 Next.js 前台和后台。
-2. Cloudflare：Workers、R2、Queues、Cron Triggers。
-3. Supabase：PostgreSQL、Auth、数据库 API。
-4. 微信开放平台：后续接微信登录时使用。
-5. 视频处理服务器：后续部署 FFmpeg 服务。
-
-## Vercel 配置
-
-Vercel 默认域名会类似：
-
-```text
-https://clip-partner.vercel.app
-```
-
-Vercel 环境变量建议先配置：
+生产环境变量：
 
 ```env
 NEXT_PUBLIC_APP_URL=https://clip-partner.vercel.app
 NEXT_PUBLIC_API_BASE_URL=https://clip-partner-api.<your-subdomain>.workers.dev
-NEXT_PUBLIC_RUNTIME_MODE=mock
+NEXT_PUBLIC_RUNTIME_MODE=real
 NEXT_PUBLIC_SUPABASE_URL=
 NEXT_PUBLIC_SUPABASE_ANON_KEY=
 ```
 
-不要把 `SUPABASE_SERVICE_ROLE_KEY` 放到 `NEXT_PUBLIC_` 变量里，也不要在浏览器侧使用。
+不要把 `SUPABASE_SERVICE_ROLE_KEY`、R2 secret、微信/抖音 secret 放进任何 `NEXT_PUBLIC_` 变量。
 
-演示账号只用于本地前端 fallback。Worker 默认不接受 mock 身份头；生产环境不要设置 `ALLOW_MOCK_AUTH=true`。外部登录接口申请期间，如需本地 Worker 联调，可以在本机 `workers/api/.dev.vars` 或 `.dev.vars` 中临时设置：
-
-```env
-ALLOW_MOCK_AUTH=true
-```
-
-`NEXT_PUBLIC_RUNTIME_MODE` 控制前端 provider/adapter 选择：
-
-- `mock`：默认，演示账号和本地 provider 全部可用。
-- `hybrid`：用于逐步接入 Worker 或第三方 API，同时保留本地 fallback。
-- `real`：不允许 mock 登录；第三方平台、视频处理和支付接口未配置前会进入人工/本地占位，不会悄悄调用 mock 登录或第三方网络。
-
-## Supabase 配置
+## Supabase
 
 1. 创建 Supabase 项目。
-2. 打开 SQL Editor。
-3. 执行 `supabase/schema.sql`。
-4. 在 Project Settings 中复制：
-   - Project URL -> `NEXT_PUBLIC_SUPABASE_URL`
-   - anon public key -> `NEXT_PUBLIC_SUPABASE_ANON_KEY`
-   - service_role key -> Cloudflare Worker secret `SUPABASE_SERVICE_ROLE_KEY`
+2. 执行 `supabase/schema.sql` 或现有迁移。
+3. 执行 `supabase/migrations/20260623200336_better_auth_gateway_foundation.sql`。
+4. 保存 Project URL、anon key、service role key。
 
-后续正式接入用户数据时，需要补 RLS policy。
+当前方案中 Supabase 只作为 Postgres 数据库，不作为 App/Web 主数据直连通道。
 
-## Cloudflare 配置
+生产建议：
 
-安装并登录 Wrangler：
+- 保留 RLS 作为数据库防线。
+- 不让客户端直接访问业务表。
+- 不关闭 Data API，直到 Worker 业务数据访问从 Supabase REST 完成迁移。
+- Better Auth 表放在 `auth_app` schema，Worker 的 Hyperdrive 连接使用 `search_path=auth_app,public`。
+
+## Cloudflare
+
+安装并登录：
 
 ```bash
 npm install
@@ -85,16 +63,41 @@ npx wrangler r2 bucket create clip-partner-assets
 npx wrangler queues create clip-partner-clip-tasks
 ```
 
-设置 Worker secrets：
+创建 Hyperdrive，连接 Supabase Postgres direct connection string：
+
+```bash
+npx wrangler hyperdrive create clip-partner-supabase \
+  --connection-string="postgresql://<user>:<password>@<supabase-host>:5432/postgres"
+```
+
+拿到 Hyperdrive id 后，在 `workers/api/wrangler.toml` 中添加：
+
+```toml
+[[hyperdrive]]
+binding = "HYPERDRIVE"
+id = "<hyperdrive-id>"
+```
+
+Worker secrets：
 
 ```bash
 npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY --config workers/api/wrangler.toml
 npx wrangler secret put BETTER_AUTH_SECRET --config workers/api/wrangler.toml
+npx wrangler secret put R2_ACCOUNT_ID --config workers/api/wrangler.toml
+npx wrangler secret put R2_ACCESS_KEY_ID --config workers/api/wrangler.toml
+npx wrangler secret put R2_SECRET_ACCESS_KEY --config workers/api/wrangler.toml
 npx wrangler secret put WECHAT_OAUTH_APP_SECRET --config workers/api/wrangler.toml
-npx wrangler secret put FFMPEG_WORKER_TOKEN --config workers/api/wrangler.toml
+npx wrangler secret put DOUYIN_APP_SECRET --config workers/api/wrangler.toml
+npx wrangler secret put WECHAT_CHANNELS_APP_SECRET --config workers/api/wrangler.toml
 ```
 
-本地运行 Worker：
+生成 Better Auth secret：
+
+```bash
+openssl rand -base64 32
+```
+
+本地 Worker：
 
 ```bash
 npm run worker:dev
@@ -106,18 +109,41 @@ npm run worker:dev
 npm run worker:deploy
 ```
 
-部署完成后，把 Worker URL 填回 Vercel：
+## Mock 登录
+
+Worker 默认不接受 mock 身份头。
+
+仅本地联调可以在 `.dev.vars` 中设置：
 
 ```env
-NEXT_PUBLIC_API_BASE_URL=https://clip-partner-api.<your-subdomain>.workers.dev
+ALLOW_MOCK_AUTH=true
 ```
 
-## 当前已预留 API
+生产必须保持：
 
-```text
-GET  /health
-GET  /integrations
-POST /clip-tasks
+```env
+APP_ENV=production
+ALLOW_MOCK_AUTH=false
 ```
 
-当前 Next.js 页面仍保留本地 mock 状态。`lib/providers` 已经隔离登录、平台数据、视频处理和打款能力；在真实登录、平台数据、视频处理和打款接口未申请完成前，所有外部能力都应通过 provider/adapter 方式接入，页面不直接依赖第三方 SDK。
+前端生产使用：
+
+```env
+NEXT_PUBLIC_RUNTIME_MODE=real
+```
+
+## 验证
+
+部署前运行：
+
+```bash
+npm run verify
+```
+
+部署后检查：
+
+- `GET /health`
+- `GET /integrations`
+- `GET /openapi.json`
+- `GET /docs`
+- `GET /api/auth/get-session`

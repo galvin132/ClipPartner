@@ -11,10 +11,18 @@ export type MockUser = {
 };
 
 export type AuthSession = Omit<MockUser, "password"> & {
-  authProvider?: "mock" | "supabase";
+  authProvider?: "mock" | "supabase" | "better-auth";
   accessToken?: string;
   expiresAt?: number;
 };
+
+export function isUserRole(value: unknown): value is UserRole {
+  return typeof value === "string" && ["admin", "reviewer", "finance", "partner"].includes(value);
+}
+
+export function roleLabel(role: UserRole) {
+  return mockUsers.find((user) => user.role === role)?.roleLabel ?? role;
+}
 
 export const mockUsers: MockUser[] = [
   {

@@ -18,6 +18,7 @@ type RouteDoc = {
   tags: string[];
   summary: string;
   successStatus?: 200 | 201 | 202;
+  bodySchema?: typeof jsonObjectSchema;
 };
 
 const jsonObjectSchema = z.object({}).passthrough();
@@ -38,6 +39,36 @@ const authSessionSchema = z
   })
   .nullable()
   .openapi("AuthSession");
+
+const walletTransactionBodySchema = z
+  .object({
+    distributorName: z.string().optional(),
+    type: z.enum(["commission", "adjustment", "freeze", "payout"]),
+    amount: z.number(),
+    status: z.enum(["available", "frozen", "pending", "paid"]),
+    source: z.string(),
+    note: z.string().optional()
+  })
+  .openapi("WalletTransactionInput");
+
+const directUploadInitBodySchema = z
+  .object({
+    fileName: z.string(),
+    contentType: z.string(),
+    size: z.number().optional(),
+    purpose: z.string().optional()
+  })
+  .openapi("DirectUploadInitInput");
+
+const directUploadCompleteBodySchema = z
+  .object({
+    key: z.string(),
+    uploadId: z.string().optional(),
+    fileName: z.string().optional(),
+    contentType: z.string().optional(),
+    size: z.number().optional()
+  })
+  .openapi("DirectUploadCompleteInput");
 
 const routeDocs: RouteDoc[] = [
   { method: "get", path: "/health", tags: ["System"], summary: "Worker health check" },
@@ -68,7 +99,14 @@ const routeDocs: RouteDoc[] = [
   { method: "get", path: "/partner/tasks", tags: ["Partner"], summary: "List open partner tasks and claims" },
   { method: "post", path: "/partner/tasks/{id}/claim", tags: ["Partner"], summary: "Claim distribution task", successStatus: 201 },
   { method: "get", path: "/partner/wallet", tags: ["Partner"], summary: "List partner wallet" },
-  { method: "post", path: "/partner/wallet/transactions", tags: ["Partner"], summary: "Create wallet transaction", successStatus: 201 },
+  {
+    method: "post",
+    path: "/partner/wallet/transactions",
+    tags: ["Partner"],
+    summary: "Create wallet transaction",
+    successStatus: 201,
+    bodySchema: walletTransactionBodySchema
+  },
   { method: "post", path: "/partner/appeals", tags: ["Partner"], summary: "Create appeal", successStatus: 201 },
   { method: "post", path: "/claims/{id}/download-url", tags: ["Claims"], summary: "Create claim download URL", successStatus: 201 },
   { method: "post", path: "/claims/{id}/submit", tags: ["Claims"], summary: "Submit task claim" },
@@ -102,8 +140,22 @@ const routeDocs: RouteDoc[] = [
   { method: "get", path: "/risk-records", tags: ["Risk"], summary: "List risk records" },
   { method: "post", path: "/risk-records", tags: ["Risk"], summary: "Create risk record", successStatus: 201 },
   { method: "patch", path: "/risk-records/{id}", tags: ["Risk"], summary: "Update risk record" },
-  { method: "post", path: "/recordings/direct-upload/init", tags: ["Recordings"], summary: "Initialize direct R2 upload", successStatus: 201 },
-  { method: "post", path: "/recordings/direct-upload/complete", tags: ["Recordings"], summary: "Complete direct R2 upload", successStatus: 201 },
+  {
+    method: "post",
+    path: "/recordings/direct-upload/init",
+    tags: ["Recordings"],
+    summary: "Initialize direct R2 upload",
+    successStatus: 201,
+    bodySchema: directUploadInitBodySchema
+  },
+  {
+    method: "post",
+    path: "/recordings/direct-upload/complete",
+    tags: ["Recordings"],
+    summary: "Complete direct R2 upload",
+    successStatus: 201,
+    bodySchema: directUploadCompleteBodySchema
+  },
   { method: "post", path: "/recordings/upload", tags: ["Recordings"], summary: "Upload recording through Worker", successStatus: 201 }
 ];
 
@@ -140,6 +192,20 @@ function registerLegacyRoute(app: OpenAPIHono<AppEnv>, route: RouteDoc, legacyHa
     path: route.path,
     tags: route.tags,
     summary: route.summary,
+    ...(route.method === "get"
+      ? {}
+      : {
+          request: {
+            body: {
+              required: true,
+              content: {
+                "application/json": {
+                  schema: route.bodySchema ?? jsonObjectSchema
+                }
+              }
+            }
+          }
+        }),
     responses: {
       [route.successStatus ?? 200]: jsonResponse(route.successStatus ?? 200),
       default: errorResponse()

@@ -15,6 +15,7 @@ workers/**/.dev.vars
 # Generated local artifacts
 worker-configuration.d.ts
 workers/**/.wrangler/
+supabase/.temp/
 .vercel/
 *.tsbuildinfo
 

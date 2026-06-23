@@ -66,6 +66,14 @@ else {
   Write-Host "SUPABASE_SERVICE_ROLE_KEY not found in environment; keeping the existing Worker secret if present."
 }
 
+$betterAuthSecret = [Environment]::GetEnvironmentVariable("BETTER_AUTH_SECRET")
+if (-not [string]::IsNullOrWhiteSpace($betterAuthSecret)) {
+  $secrets["BETTER_AUTH_SECRET"] = $betterAuthSecret
+}
+else {
+  Write-Host "BETTER_AUTH_SECRET not found in environment; keeping the existing Worker secret if present."
+}
+
 $wrangler = Join-Path (Get-Location) "node_modules/.bin/wrangler.cmd"
 $secretFile = Join-Path ([System.IO.Path]::GetTempPath()) ("clip-partner-worker-secrets-" + [guid]::NewGuid().ToString("N") + ".json")
 try {

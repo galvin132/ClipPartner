@@ -74,6 +74,8 @@ test("worker exposes OpenAPI documentation for the unified API gateway", async (
   assert.ok(spec.paths["/admin/distributors"]);
   assert.ok(spec.paths["/partner/tasks"]);
   assert.ok(spec.paths["/api/auth/get-session"]);
+  assert.ok(spec.paths["/partner/wallet/transactions"].post.requestBody);
+  assert.ok(spec.paths["/recordings/direct-upload/init"].post.requestBody);
 });
 
 test("worker exposes a Swagger UI page for API consumers", async () => {
@@ -84,7 +86,7 @@ test("worker exposes a Swagger UI page for API consumers", async () => {
 });
 
 test("better auth session endpoint is mounted under the Worker gateway", async () => {
-  const response = await worker.fetch(request("/api/auth/get-session"), env());
+  const response = await worker.fetch(request("/api/auth/get-session"), env({ APP_ENV: "development" }));
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /application\/json/);
 });
@@ -120,6 +122,53 @@ test("better auth email flow creates a partner session in development", async ()
   assert.equal(signIn.status, 200);
   assert.equal(signInBody.user.role, "partner");
   assert.equal(typeof signInBody.token, "string");
+});
+
+test("better auth bearer token authorizes business API sessions without Supabase Auth validation", async () => {
+  const authEnv = env({
+    APP_ENV: "development",
+    BETTER_AUTH_SECRET: "0123456789abcdef0123456789abcdef"
+  });
+  const email = `partner-business-${Date.now()}@example.test`;
+  const password = "password1234";
+
+  await worker.fetch(
+    request("/api/auth/sign-up/email", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Business Partner", email, password })
+    }),
+    authEnv
+  );
+
+  const signIn = await worker.fetch(
+    request("/api/auth/sign-in/email", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email, password })
+    }),
+    authEnv
+  );
+  const token = (await body(signIn)).token;
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const textUrl = String(url);
+    if (textUrl.includes("/auth/v1/user")) {
+      throw new Error("Supabase Auth must not validate Better Auth bearer tokens");
+    }
+    return Response.json([]);
+  };
+
+  try {
+    const response = await worker.fetch(request("/me", { headers: { authorization: `Bearer ${token}` } }), authEnv);
+    assert.equal(response.status, 200);
+    const responseBody = await body(response);
+    assert.equal(responseBody.user.role, "partner");
+    assert.equal(responseBody.providers.authProvider, "better-auth");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("admin route with partner mock role returns 403 when mock auth is enabled", async () => {

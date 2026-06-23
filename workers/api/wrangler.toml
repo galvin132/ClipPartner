@@ -27,6 +27,11 @@ queue = "clip-partner-clip-tasks"
 max_batch_size = 5
 max_batch_timeout = 30
 
+# Add this after creating Hyperdrive for the Supabase direct connection:
+# [[hyperdrive]]
+# binding = "HYPERDRIVE"
+# id = "<hyperdrive-id>"
+
 [triggers]
 crons = ["*/30 * * * *"]
 

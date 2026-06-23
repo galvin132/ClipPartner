@@ -1,6 +1,7 @@
 "use client";
 
-import { reportClientIssue } from "./client-observability";
+import type { AuthSession } from "./auth.ts";
+import { reportClientIssue } from "./client-observability.ts";
 
 const AUTH_STORAGE_KEY = "clip-partner-auth-session-v1";
 const AUTH_ROLES = new Set(["admin", "reviewer", "finance", "partner"]);
@@ -9,31 +10,33 @@ export function apiBase() {
   return process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "");
 }
 
+export function headersForSession(session: Partial<AuthSession> | null | undefined) {
+  if (!session || typeof session.role !== "string" || !AUTH_ROLES.has(session.role)) return {};
+
+  if (
+    (session.authProvider === "better-auth" || session.authProvider === "supabase") &&
+    typeof session.accessToken === "string" &&
+    session.accessToken
+  ) {
+    return { authorization: `Bearer ${session.accessToken}` };
+  }
+
+  if (session.authProvider !== "mock") return {};
+
+  return {
+    "x-clip-role": session.role,
+    "x-clip-user-id": typeof session.id === "string" ? session.id : `mock-${session.role}`,
+    "x-clip-display-name": typeof session.displayName === "string" ? session.displayName : "",
+    "x-clip-auth-provider": "mock"
+  };
+}
+
 export function sessionHeaders() {
   if (typeof window === "undefined") return {};
-
   try {
     const raw = window.localStorage.getItem(AUTH_STORAGE_KEY);
     if (!raw) return {};
-    const session = JSON.parse(raw) as {
-      id?: unknown;
-      role?: unknown;
-      displayName?: unknown;
-      authProvider?: unknown;
-      accessToken?: unknown;
-    };
-    if (typeof session.role !== "string" || !AUTH_ROLES.has(session.role)) return {};
-
-    const headers: Record<string, string> = {
-      "x-clip-role": session.role,
-      "x-clip-user-id": typeof session.id === "string" ? session.id : `mock-${session.role}`,
-      "x-clip-display-name": typeof session.displayName === "string" ? session.displayName : "",
-      "x-clip-auth-provider": session.authProvider === "supabase" ? "supabase" : "mock"
-    };
-    if (session.authProvider === "supabase" && typeof session.accessToken === "string" && session.accessToken) {
-      headers.authorization = `Bearer ${session.accessToken}`;
-    }
-    return headers;
+    return headersForSession(JSON.parse(raw) as Partial<AuthSession>);
   } catch {
     return {};
   }
@@ -57,6 +60,7 @@ export async function apiJson<T>(path: string, init: RequestInit = {}) {
 
     response = await fetch(`${base}${path}`, {
       ...init,
+      credentials: init.credentials ?? "include",
       headers
     });
   } catch (error) {

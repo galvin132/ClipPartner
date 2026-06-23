@@ -1,5 +1,6 @@
-import { betterAuth } from "better-auth/minimal";
+import { betterAuth } from "better-auth";
 import { admin, bearer } from "better-auth/plugins";
+import { Pool } from "pg";
 
 import type { WorkerEnv } from "./index.ts";
 
@@ -8,6 +9,13 @@ type ClipPartnerAuth = {
 };
 
 const authCache = new Map<string, ClipPartnerAuth>();
+
+class BetterAuthConfigurationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BetterAuthConfigurationError";
+  }
+}
 
 function authBaseUrl(env: WorkerEnv, request: Request) {
   return env.BETTER_AUTH_URL?.replace(/\/$/, "") ?? new URL(request.url).origin;
@@ -21,18 +29,38 @@ function authSecret(env: WorkerEnv) {
   return "clip-partner-local-better-auth-secret-change-before-production";
 }
 
+function authDatabase(env: WorkerEnv) {
+  const connectionString = env.HYPERDRIVE?.connectionString ?? env.BETTER_AUTH_DATABASE_URL;
+  if (connectionString) {
+    return new Pool({
+      connectionString,
+      max: env.APP_ENV === "production" ? 5 : 1,
+      options: "-c search_path=auth_app,public"
+    });
+  }
+
+  if (env.APP_ENV === "production") {
+    throw new BetterAuthConfigurationError("Better Auth requires Hyperdrive or BETTER_AUTH_DATABASE_URL in production");
+  }
+
+  return undefined;
+}
+
 export function getClipPartnerAuth(env: WorkerEnv, request: Request) {
   const baseURL = authBaseUrl(env, request);
   const secret = authSecret(env);
-  const cacheKey = `${baseURL}:${secret}:${env.APP_ENV ?? "development"}`;
+  const connectionKey = env.HYPERDRIVE?.connectionString ?? env.BETTER_AUTH_DATABASE_URL ?? "memory";
+  const cacheKey = `${baseURL}:${secret}:${env.APP_ENV ?? "development"}:${connectionKey}`;
   const cached = authCache.get(cacheKey);
   if (cached) return cached;
+  const database = authDatabase(env);
 
   const auth = betterAuth({
     appName: "ClipPartner",
     baseURL,
     basePath: "/api/auth",
     secret,
+    database,
     trustedOrigins: [env.FRONTEND_ORIGIN, baseURL].filter(Boolean),
     emailAndPassword: {
       enabled: true,
@@ -52,6 +80,21 @@ export function getClipPartnerAuth(env: WorkerEnv, request: Request) {
 }
 
 export async function handleBetterAuthRequest(request: Request, env: WorkerEnv) {
-  const auth = getClipPartnerAuth(env, request);
-  return auth.handler(request);
+  try {
+    const auth = getClipPartnerAuth(env, request);
+    return auth.handler(request);
+  } catch (error) {
+    if (error instanceof BetterAuthConfigurationError) {
+      return Response.json(
+        {
+          error: {
+            code: "auth_database_not_configured",
+            message: error.message
+          }
+        },
+        { status: 503 }
+      );
+    }
+    throw error;
+  }
 }
