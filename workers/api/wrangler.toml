@@ -32,6 +32,7 @@ crons = ["*/30 * * * *"]
 
 # Production values should be set with:
 # wrangler secret put SUPABASE_SERVICE_ROLE_KEY
+# wrangler secret put BETTER_AUTH_SECRET
 # wrangler secret put R2_ACCOUNT_ID
 # wrangler secret put R2_ACCESS_KEY_ID
 # wrangler secret put R2_SECRET_ACCESS_KEY

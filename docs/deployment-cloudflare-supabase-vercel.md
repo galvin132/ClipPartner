@@ -89,6 +89,7 @@ npx wrangler queues create clip-partner-clip-tasks
 
 ```bash
 npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY --config workers/api/wrangler.toml
+npx wrangler secret put BETTER_AUTH_SECRET --config workers/api/wrangler.toml
 npx wrangler secret put WECHAT_OAUTH_APP_SECRET --config workers/api/wrangler.toml
 npx wrangler secret put FFMPEG_WORKER_TOKEN --config workers/api/wrangler.toml
 ```

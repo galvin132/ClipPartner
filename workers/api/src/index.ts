@@ -10,6 +10,7 @@ import {
   taskClaimOwnershipFilter,
   type UserRole
 } from "./auth-policy.ts";
+import { createApiApp } from "./http-app.ts";
 
 type PlatformValue = "douyin" | "wechat_channels";
 const DOUYIN_LABEL = "\u6296\u97f3";
@@ -169,10 +170,12 @@ type ListMeta = {
   nextOffset: number | null;
 };
 
-type WorkerEnv = Cloudflare.Env & {
+export type WorkerEnv = Cloudflare.Env & {
   APP_ENV?: string;
   ALLOW_MOCK_AUTH?: string;
   FRONTEND_ORIGIN: string;
+  BETTER_AUTH_SECRET?: string;
+  BETTER_AUTH_URL?: string;
   NEXT_PUBLIC_SUPABASE_URL: string;
   NEXT_PUBLIC_SUPABASE_ANON_KEY?: string;
   SUPABASE_SERVICE_ROLE_KEY: string;
@@ -3279,8 +3282,7 @@ async function processClipQueuePayload(env: WorkerEnv, payload: Partial<ClipTask
   }
 }
 
-const worker = {
-  async fetch(request: Request, env: WorkerEnv, ctx: ExecutionContext): Promise<Response> {
+export async function handleApiRequest(request: Request, env: WorkerEnv, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
     try {
@@ -3728,6 +3730,23 @@ const worker = {
       logError(request, error);
       return errorJson(error, env);
     }
+}
+
+const apiApp = createApiApp(handleApiRequest);
+
+const worker = {
+  async fetch(request: Request, env: WorkerEnv, ctx?: ExecutionContext): Promise<Response> {
+    const executionContext =
+      ctx ??
+      ({
+        waitUntil() {
+          return undefined;
+        },
+        passThroughOnException() {
+          return undefined;
+        }
+      } as unknown as ExecutionContext);
+    return apiApp.fetch(request, env, executionContext);
   },
 
   async scheduled(_event: ScheduledEvent, env: WorkerEnv): Promise<void> {
