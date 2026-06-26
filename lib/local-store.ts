@@ -32,6 +32,11 @@ import {
 } from "./provider-actions";
 import { providers } from "./providers";
 import { getProductValidity } from "./product-rules";
+import {
+  canPersistLocalState,
+  canUseLocalMutationFallback,
+  shouldLoadLocalStateBeforeRemoteSync
+} from "./sync-policy";
 import type {
   AccountBinding,
   AccountBindingStatus,
@@ -389,10 +394,19 @@ export function useClipPartnerStore() {
 
   useEffect(() => {
     const timer = window.setTimeout(async () => {
-      setState(loadLocalState());
+      if (shouldLoadLocalStateBeforeRemoteSync()) {
+        setState(loadLocalState());
+      }
       setIsHydrated(true);
 
       if (!apiBase()) {
+        if (!shouldLoadLocalStateBeforeRemoteSync()) {
+          void reportClientIssue("sync_error", "Real runtime mode requires NEXT_PUBLIC_API_BASE_URL", {
+            severity: "error",
+            feature: "initial_remote_load"
+          });
+          setSyncStatus("error");
+        }
         return;
       }
 
@@ -416,8 +430,10 @@ export function useClipPartnerStore() {
   }, []);
 
   useEffect(() => {
-    if (isHydrated) {
+    if (isHydrated && canPersistLocalState()) {
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    } else if (isHydrated) {
+      window.localStorage.removeItem(STORAGE_KEY);
     }
   }, [isHydrated, state]);
 
@@ -438,6 +454,8 @@ export function useClipPartnerStore() {
   }, [state]);
 
   async function syncMutation(path: string, init: RequestInit, localFallback: () => ClipPartnerState) {
+    const allowLocalFallback = canUseLocalMutationFallback();
+
     try {
       if (apiBase()) {
         setSyncStatus("syncing");
@@ -448,18 +466,39 @@ export function useClipPartnerStore() {
           return;
         }
       }
-      setState(localFallback());
+
+      if (allowLocalFallback) {
+        setState(localFallback());
+      } else {
+        void reportClientIssue("sync_error", "Remote mutation skipped because API base URL is missing in real mode", {
+          severity: "error",
+          feature: "mutation",
+          details: {
+            path,
+            method: init.method ?? "GET"
+          }
+        });
+        setSyncStatus("error");
+      }
     } catch {
-      void reportClientIssue("sync_error", "Remote mutation failed; local fallback applied", {
-        severity: "warn",
-        feature: "mutation",
-        details: {
-          path,
-          method: init.method ?? "GET"
+      void reportClientIssue(
+        "sync_error",
+        allowLocalFallback
+          ? "Remote mutation failed; local fallback applied"
+          : "Remote mutation failed; local fallback blocked in real mode",
+        {
+          severity: allowLocalFallback ? "warn" : "error",
+          feature: "mutation",
+          details: {
+            path,
+            method: init.method ?? "GET"
+          }
         }
-      });
+      );
       setSyncStatus("error");
-      setState(localFallback());
+      if (allowLocalFallback) {
+        setState(localFallback());
+      }
     }
   }
 
@@ -859,14 +898,27 @@ export function useClipPartnerStore() {
 
   async function uploadRecording(file: File, input: Pick<Material, "title" | "ipName" | "sourcePlatform">) {
     const base = apiBase();
+    const allowLocalFallback = canUseLocalMutationFallback();
     if (!base) {
-      setState((current) =>
-        addLocalClipTaskState(current, {
-          recordingTitle: input.title,
-          ipName: input.ipName,
-          sourcePlatform: input.sourcePlatform
-        })
-      );
+      if (allowLocalFallback) {
+        setState((current) =>
+          addLocalClipTaskState(current, {
+            recordingTitle: input.title,
+            ipName: input.ipName,
+            sourcePlatform: input.sourcePlatform
+          })
+        );
+      } else {
+        void reportClientIssue("upload_error", "Recording upload skipped because API base URL is missing in real mode", {
+          severity: "error",
+          feature: "recording_upload",
+          details: {
+            fileType: file.type || "application/octet-stream",
+            fileSize: file.size
+          }
+        });
+        setSyncStatus("error");
+      }
       return;
     }
 
@@ -943,22 +995,30 @@ export function useClipPartnerStore() {
       setState((await response.json()) as ClipPartnerState);
       setSyncStatus("remote");
     } catch {
-      void reportClientIssue("upload_error", "Recording upload failed; local clip task fallback applied", {
-        severity: "error",
-        feature: "recording_upload",
-        details: {
-          fileType: file.type || "application/octet-stream",
-          fileSize: file.size
+      void reportClientIssue(
+        "upload_error",
+        allowLocalFallback
+          ? "Recording upload failed; local clip task fallback applied"
+          : "Recording upload failed; local clip task fallback blocked in real mode",
+        {
+          severity: "error",
+          feature: "recording_upload",
+          details: {
+            fileType: file.type || "application/octet-stream",
+            fileSize: file.size
+          }
         }
-      });
-      setSyncStatus("error");
-      setState((current) =>
-        addLocalClipTaskState(current, {
-          recordingTitle: input.title,
-          ipName: input.ipName,
-          sourcePlatform: input.sourcePlatform
-        })
       );
+      setSyncStatus("error");
+      if (allowLocalFallback) {
+        setState((current) =>
+          addLocalClipTaskState(current, {
+            recordingTitle: input.title,
+            ipName: input.ipName,
+            sourcePlatform: input.sourcePlatform
+          })
+        );
+      }
     }
   }
 

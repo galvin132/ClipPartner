@@ -74,6 +74,14 @@ else {
   Write-Host "BETTER_AUTH_SECRET not found in environment; keeping the existing Worker secret if present."
 }
 
+$configEncryptionKey = [Environment]::GetEnvironmentVariable("CONFIG_ENCRYPTION_KEY")
+if (-not [string]::IsNullOrWhiteSpace($configEncryptionKey)) {
+  $secrets["CONFIG_ENCRYPTION_KEY"] = $configEncryptionKey
+}
+else {
+  Write-Host "CONFIG_ENCRYPTION_KEY not found in environment; keeping the existing Worker secret if present."
+}
+
 $wrangler = Join-Path (Get-Location) "node_modules/.bin/wrangler.cmd"
 $secretFile = Join-Path ([System.IO.Path]::GetTempPath()) ("clip-partner-worker-secrets-" + [guid]::NewGuid().ToString("N") + ".json")
 try {

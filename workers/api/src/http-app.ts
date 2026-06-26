@@ -76,6 +76,11 @@ const routeDocs: RouteDoc[] = [
   { method: "get", path: "/me", tags: ["Auth"], summary: "Current ClipPartner session" },
   { method: "get", path: "/state", tags: ["Legacy"], summary: "Legacy aggregate state" },
   { method: "post", path: "/state/reset", tags: ["Legacy"], summary: "Reset demo state" },
+  { method: "get", path: "/admin/settings", tags: ["System"], summary: "Read backend system settings" },
+  { method: "patch", path: "/admin/settings", tags: ["System"], summary: "Update backend system settings" },
+  { method: "get", path: "/admin/integrations/{key}", tags: ["System"], summary: "Read integration configuration" },
+  { method: "patch", path: "/admin/integrations/{key}", tags: ["System"], summary: "Update integration configuration" },
+  { method: "post", path: "/admin/integrations/{key}/test", tags: ["System"], summary: "Validate integration configuration" },
   { method: "get", path: "/admin/distributors", tags: ["Admin"], summary: "List distributors" },
   { method: "get", path: "/admin/training", tags: ["Admin"], summary: "List training state" },
   { method: "get", path: "/admin/authorization-pools", tags: ["Admin"], summary: "List authorization pools" },
@@ -96,6 +101,16 @@ const routeDocs: RouteDoc[] = [
   { method: "post", path: "/partner/exam-attempts", tags: ["Partner"], summary: "Record partner exam attempt", successStatus: 201 },
   { method: "post", path: "/partner/agreements/sign", tags: ["Partner"], summary: "Sign partner agreement", successStatus: 201 },
   { method: "get", path: "/partner/authorizations", tags: ["Partner"], summary: "List partner authorizations" },
+  { method: "get", path: "/partner/social-accounts", tags: ["Partner"], summary: "List partner social accounts" },
+  { method: "post", path: "/partner/social-accounts", tags: ["Partner"], summary: "Create partner social account", successStatus: 201 },
+  { method: "get", path: "/partner/authorization-requests", tags: ["Partner"], summary: "List partner authorization requests" },
+  {
+    method: "post",
+    path: "/partner/authorization-requests",
+    tags: ["Partner"],
+    summary: "Create partner authorization request",
+    successStatus: 201
+  },
   { method: "get", path: "/partner/tasks", tags: ["Partner"], summary: "List open partner tasks and claims" },
   { method: "post", path: "/partner/tasks/{id}/claim", tags: ["Partner"], summary: "Claim distribution task", successStatus: 201 },
   { method: "get", path: "/partner/wallet", tags: ["Partner"], summary: "List partner wallet" },
@@ -108,6 +123,32 @@ const routeDocs: RouteDoc[] = [
     bodySchema: walletTransactionBodySchema
   },
   { method: "post", path: "/partner/appeals", tags: ["Partner"], summary: "Create appeal", successStatus: 201 },
+  { method: "post", path: "/partner/settlements/{id}/dispute", tags: ["Partner"], summary: "Dispute settlement", successStatus: 201 },
+  { method: "post", path: "/admin/authorizations/{id}/pause", tags: ["Admin"], summary: "Pause authorization" },
+  { method: "post", path: "/admin/authorizations/{id}/resume", tags: ["Admin"], summary: "Resume authorization" },
+  { method: "post", path: "/admin/products/{id}/disable", tags: ["Products"], summary: "Disable product" },
+  { method: "get", path: "/admin/products/{id}/commission-history", tags: ["Products"], summary: "Product commission history" },
+  { method: "get", path: "/admin/performance-imports", tags: ["Publishing"], summary: "List performance imports" },
+  { method: "post", path: "/admin/performance-imports", tags: ["Publishing"], summary: "Create performance import", successStatus: 201 },
+  { method: "get", path: "/admin/performance-imports/{id}", tags: ["Publishing"], summary: "Get performance import" },
+  { method: "get", path: "/admin/performance-imports/{id}/errors", tags: ["Publishing"], summary: "List performance import errors" },
+  { method: "post", path: "/admin/publish-records/{id}/verify", tags: ["Publishing"], summary: "Verify publish record" },
+  { method: "post", path: "/admin/publish-records/bulk-review", tags: ["Publishing"], summary: "Bulk review publish records" },
+  { method: "post", path: "/admin/settlements/{id}/confirm", tags: ["Settlements"], summary: "Confirm settlement" },
+  { method: "post", path: "/admin/settlements/{id}/pay", tags: ["Settlements"], summary: "Mark settlement paid" },
+  {
+    method: "post",
+    path: "/admin/settlement-periods/generate",
+    tags: ["Settlements"],
+    summary: "Generate settlement period",
+    successStatus: 201
+  },
+  { method: "patch", path: "/admin/appeals/{id}", tags: ["Risk"], summary: "Review appeal" },
+  { method: "get", path: "/ffmpeg/jobs", tags: ["FFmpeg"], summary: "List FFmpeg jobs" },
+  { method: "post", path: "/ffmpeg/jobs", tags: ["FFmpeg"], summary: "Create FFmpeg job", successStatus: 202 },
+  { method: "get", path: "/ffmpeg/jobs/{id}", tags: ["FFmpeg"], summary: "Get FFmpeg job" },
+  { method: "patch", path: "/ffmpeg/jobs/{id}", tags: ["FFmpeg"], summary: "Update FFmpeg job" },
+  { method: "post", path: "/ffmpeg/webhook", tags: ["FFmpeg"], summary: "Receive FFmpeg webhook", successStatus: 202 },
   { method: "post", path: "/claims/{id}/download-url", tags: ["Claims"], summary: "Create claim download URL", successStatus: 201 },
   { method: "post", path: "/claims/{id}/submit", tags: ["Claims"], summary: "Submit task claim" },
   { method: "get", path: "/notifications", tags: ["Notifications"], summary: "List notifications" },
@@ -186,15 +227,28 @@ function errorResponse() {
   };
 }
 
+function legacyRequest(c: Context<AppEnv>, route: RouteDoc): Request {
+  const raw = c.req.raw;
+  const contentType = raw.headers.get("content-type") ?? "";
+  if (route.bodySchema && route.method !== "get" && contentType.includes("application/json")) {
+    const validatedBody = c.req.valid("json" as never) as unknown;
+    return new Request(raw.url, {
+      method: raw.method,
+      headers: raw.headers,
+      body: JSON.stringify(validatedBody ?? {})
+    });
+  }
+  return raw.clone() as Request;
+}
+
 function registerLegacyRoute(app: OpenAPIHono<AppEnv>, route: RouteDoc, legacyHandler: LegacyHandler) {
   const config = createRoute({
     method: route.method,
     path: route.path,
     tags: route.tags,
     summary: route.summary,
-    ...(route.method === "get"
-      ? {}
-      : {
+    ...(route.bodySchema
+      ? {
           request: {
             body: {
               required: true,
@@ -203,16 +257,17 @@ function registerLegacyRoute(app: OpenAPIHono<AppEnv>, route: RouteDoc, legacyHa
                   schema: route.bodySchema ?? jsonObjectSchema
                 }
               }
-            }
           }
-        }),
+        }
+      }
+      : {}),
     responses: {
       [route.successStatus ?? 200]: jsonResponse(route.successStatus ?? 200),
       default: errorResponse()
     }
   });
 
-  app.openapi(config, ((c: Context<AppEnv>) => legacyHandler(c.req.raw, c.env, executionContext(c))) as never);
+  app.openapi(config, ((c: Context<AppEnv>) => legacyHandler(legacyRequest(c, route), c.env, executionContext(c))) as never);
 }
 
 export function createApiApp(legacyHandler: LegacyHandler) {

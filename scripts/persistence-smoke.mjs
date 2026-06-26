@@ -44,7 +44,9 @@ const names = {
   product: `${suffix}-Product`,
   material: `${suffix}-Material`,
   task: `${suffix}-Task`,
-  risk: `${suffix}-Risk`
+  risk: `${suffix}-Risk`,
+  appeal: `${suffix}-Appeal`,
+  importFile: `${suffix}-performance.json`
 };
 
 function sleep(ms) {
@@ -145,6 +147,28 @@ function find(items, predicate, label) {
   return item;
 }
 
+async function createSmokeSettlement(distributorId) {
+  if (supabaseUrl && serviceRoleKey) {
+    const rows = await supabase("/settlement_orders", {
+      method: "POST",
+      headers: { prefer: "return=representation" },
+      body: JSON.stringify({
+        distributor_id: distributorId,
+        period: suffix,
+        status: "pending",
+        total_amount: 42
+      })
+    });
+    return find(rows, (item) => item.id, "settlement fixture");
+  }
+
+  const state = await api("/admin/settlement-periods/generate", {
+    method: "POST",
+    body: JSON.stringify({ period: "2099-12" })
+  });
+  return find(state.settlements, (item) => item.distributorName === names.distributor, "generated settlement");
+}
+
 async function cleanup(notificationId) {
   if (process.env.PERSISTENCE_SMOKE_KEEP_DATA === "1") {
     console.log(`Kept persistence smoke data with prefix ${suffix}`);
@@ -160,6 +184,11 @@ async function cleanup(notificationId) {
     );
   }
   await supabase(`/risk_events?title=eq.${encodeURIComponent(names.risk)}`, { method: "DELETE", headers: prefer });
+  await supabase(`/performance_import_batches?file_name=eq.${encodeURIComponent(names.importFile)}`, {
+    method: "DELETE",
+    headers: prefer
+  });
+  await supabase(`/settlement_orders?period=eq.${encodeURIComponent(suffix)}`, { method: "DELETE", headers: prefer });
   await supabase(`/distributor_profiles?display_name=eq.${encodeURIComponent(names.distributor)}`, {
     method: "DELETE",
     headers: prefer
@@ -177,7 +206,7 @@ try {
     "/partner/wallet?limit=1",
     {
       headers: {
-        authorization: "Bearer invalid-token"
+        authorization: "Bearer invalid.invalid.invalid"
       }
     },
     401,
@@ -208,9 +237,9 @@ try {
   });
   await api("/partner/exam-attempts", { method: "POST", body: JSON.stringify({ score: 92 }) });
   let state = await api("/partner/agreements/sign", { method: "POST", body: JSON.stringify({}) });
-  find(state.distributorProfiles, (item) => item.displayName === names.distributor, "profile");
+  const profile = find(state.distributorProfiles, (item) => item.displayName === names.distributor, "profile");
 
-  state = await api("/account-bindings", {
+  state = await api("/partner/social-accounts", {
     method: "POST",
     body: JSON.stringify({
       platform: "douyin",
@@ -242,7 +271,7 @@ try {
   });
   find(state.authorizationPools, (item) => item.ipName === names.ip, "authorization pool");
 
-  state = await api("/authorization-requests", {
+  state = await api("/partner/authorization-requests", {
     method: "POST",
     body: JSON.stringify({
       socialAccount: names.account,
@@ -297,6 +326,60 @@ try {
   });
   find(state.taskClaims, (item) => item.id === claim.id && item.status === "submitted", "submitted claim");
 
+  const submittedPublish = find(
+    state.publishRecords,
+    (item) =>
+      item.distributorName === names.distributor &&
+      item.materialTitle === names.material &&
+      item.productName === names.product &&
+      item.status === "submitted",
+    "submitted publish record"
+  );
+
+  state = await api(`/admin/publish-records/${submittedPublish.id}/verify`, {
+    method: "POST",
+    body: JSON.stringify({ result: "verified", reason: suffix })
+  });
+  find(state.publishRecords, (item) => item.id === submittedPublish.id && item.status === "verified", "verified publish record");
+
+  const performanceImportState = await api("/admin/performance-imports", {
+    method: "POST",
+    body: JSON.stringify({
+      fileName: names.importFile,
+      rows: [
+        {
+          publishRecordId: submittedPublish.id,
+          platform: "douyin",
+          gmv: 180,
+          commission: 36
+        },
+        {
+          publishUrl: `https://example.com/${suffix}/unmatched-work`,
+          platform: "douyin",
+          gmv: 10,
+          commission: 1
+        }
+      ]
+    })
+  });
+  const performanceImportId = performanceImportState.performanceImport?.id;
+  if (!performanceImportId) throw new Error("Missing performance import");
+  const performanceImports = await api("/admin/performance-imports?limit=5");
+  find(performanceImports.performanceImports, (item) => item.fileName === names.importFile, "performance import");
+  await api(`/admin/performance-imports/${performanceImportId}`);
+  const importErrors = await api(`/admin/performance-imports/${performanceImportId}/errors?limit=5`);
+  find(importErrors.errors, (item) => item.errorCode === "unmatched_publish_record", "performance import error");
+
+  const settlement = await createSmokeSettlement(profile.id);
+  await api(`/partner/settlements/${settlement.id}/dispute`, {
+    method: "POST",
+    body: JSON.stringify({ reason: suffix })
+  });
+  const disputeRows = await supabase(
+    `/settlement_disputes?select=id&settlement_order_id=eq.${encodeURIComponent(settlement.id)}&reason=eq.${encodeURIComponent(suffix)}&limit=1`
+  );
+  if (!disputeRows?.[0]?.id) throw new Error("Missing settlement dispute");
+
   state = await api("/partner/wallet/transactions", {
     method: "POST",
     body: JSON.stringify({
@@ -332,8 +415,21 @@ try {
 
   await api("/partner/appeals", {
     method: "POST",
-    body: JSON.stringify({ riskEventId, reason: "E2E appeal" })
+    body: JSON.stringify({ riskEventId, reason: names.appeal })
   });
+  const appealRows = await supabase(
+    `/appeals?select=id,status,handled_note&reason=eq.${encodeURIComponent(names.appeal)}&limit=1`
+  );
+  const appealId = appealRows?.[0]?.id;
+  if (!appealId) throw new Error("Missing appeal");
+  await api(`/admin/appeals/${appealId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ status: "resolved", handledNote: suffix })
+  });
+  const reviewedAppealRows = await supabase(
+    `/appeals?select=status,handled_note&id=eq.${encodeURIComponent(appealId)}&limit=1`
+  );
+  if (reviewedAppealRows?.[0]?.status !== "resolved") throw new Error("Appeal review did not persist");
 
   const notifications = await api("/notifications?limit=1");
   notificationId = notifications.notifications?.[0]?.id;

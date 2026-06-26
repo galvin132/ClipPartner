@@ -11,6 +11,17 @@ import {
   type UserRole
 } from "./auth-policy.ts";
 import { handleBetterAuthRequest } from "./better-auth.ts";
+import {
+  integrationReadiness,
+  loadIntegrationConfig,
+  loadIntegrationRuntimeConfig,
+  loadSystemSettings,
+  redactIntegrationConfig,
+  saveIntegrationConfig,
+  saveSystemSettings,
+  testIntegrationConfig,
+  type IntegrationProviderKey
+} from "./config-center.ts";
 import type { WorkerEnv } from "./env.ts";
 import { ApiError } from "./errors.ts";
 import { createApiApp } from "./http-app.ts";
@@ -400,6 +411,94 @@ const appealSchema = z.object({
   reason: nonEmptyString.max(1000)
 });
 
+const systemSettingsPatchSchema = z.object({
+  runtimeMode: z.enum(["mock", "hybrid", "real"]).optional(),
+  commissionShare: z.coerce.number().min(0).max(100).optional(),
+  dailyClaimLimit: z.coerce.number().int().min(0).max(10000).optional(),
+  riskKeywords: z.union([z.array(z.string().trim().min(1).max(120)), z.string().trim().max(2000)]).optional()
+});
+
+const integrationProviderKeySchema = z.enum([
+  "wechat_oauth",
+  "douyin",
+  "wechat_channels",
+  "tencent_identity",
+  "payment",
+  "ffmpeg"
+]);
+
+const integrationConfigPatchSchema = z.object({
+  enabled: z.boolean().optional(),
+  publicConfig: z.record(z.string(), z.unknown()).optional(),
+  secrets: z.record(z.string(), z.string()).optional()
+});
+
+const reasonSchema = z.object({
+  reason: z.string().trim().max(1000).optional(),
+  note: z.string().trim().max(1000).optional()
+});
+
+const publishVerifySchema = z.object({
+  result: z.enum(["verified", "invalid"]).default("verified"),
+  reason: z.string().trim().max(1000).optional()
+});
+
+const publishBulkReviewSchema = z.object({
+  ids: z.array(nonEmptyString.max(120)).min(1).max(100),
+  result: z.enum(["verified", "invalid"]).default("verified"),
+  reason: z.string().trim().max(1000).optional()
+});
+
+const performanceImportSchema = z.object({
+  fileName: nonEmptyString.max(240).default("manual.json"),
+  rows: z
+    .array(
+      z.object({
+        publishRecordId: z.string().trim().min(1).max(120).optional(),
+        publishUrl: z.url().max(1000).optional(),
+        platform: platformSchema.optional(),
+        gmv: z.coerce.number().min(0).max(999999999).default(0),
+        commission: z.coerce.number().min(0).max(999999999).default(0)
+      })
+    )
+    .min(1)
+    .max(500)
+});
+
+const settlementPeriodSchema = z.object({
+  period: z
+    .string()
+    .trim()
+    .regex(/^\d{4}-\d{2}$/)
+    .default(() => new Date().toISOString().slice(0, 7))
+});
+
+const settlementDisputeSchema = z.object({
+  reason: nonEmptyString.max(1000)
+});
+
+const appealReviewSchema = z.object({
+  status: z.enum(["open", "resolved", "rejected"]),
+  handledNote: z.string().trim().max(1000).optional()
+});
+
+const ffmpegJobSchema = z.object({
+  clipTaskId: nonEmptyString.max(120),
+  r2Key: nonEmptyString.max(500),
+  outputPrefix: z.string().trim().max(500).optional()
+});
+
+const ffmpegJobPatchSchema = z.object({
+  status: z.enum(["queued", "processing", "completed", "failed", "pending_external_config"]),
+  message: z.string().trim().max(1000).optional()
+});
+
+const ffmpegWebhookSchema = z.object({
+  jobId: nonEmptyString.max(120),
+  status: z.enum(["queued", "processing", "completed", "failed"]),
+  message: z.string().trim().max(1000).optional()
+});
+
 const platformToLabel: Record<PlatformValue, PlatformLabel> = {
   douyin: DOUYIN_LABEL,
   wechat_channels: WECHAT_CHANNELS_LABEL
@@ -586,6 +685,10 @@ async function readRequestSession(env: WorkerEnv, request: Request): Promise<Req
 }
 
 async function authorizeRequest(request: Request, env: WorkerEnv, pathname: string) {
+  if (pathname === "/ffmpeg/webhook") {
+    return null;
+  }
+
   const allowedRoles = routeRoles(pathname, request.method);
   const session = await readRequestSession(env, request);
 
@@ -1395,6 +1498,8 @@ async function importPerformance(env: WorkerEnv, publishRecordId: string, gmv: n
 }
 
 async function generateSettlement(env: WorkerEnv) {
+  const settings = await loadSystemSettings(env);
+  const shareRate = settings.commissionShare / 100;
   const records = await selectRows<{
     id: string;
     distributor_id: string;
@@ -1409,7 +1514,7 @@ async function generateSettlement(env: WorkerEnv) {
   const settleableRecords = records.filter((record) => isUsableProduct(record.products));
   const payable = settleableRecords.reduce((sum, record) => {
     const latest = record.performance_snapshots.at(-1);
-    return sum + Number(latest?.commission_amount ?? 0) * 0.5;
+    return sum + Number(latest?.commission_amount ?? 0) * shareRate;
   }, 0);
 
   const distributor = settleableRecords[0]?.distributor_id ?? (await findOrCreateDistributor(env, "Monthly settlement")).id;
@@ -1584,21 +1689,23 @@ async function listAccountBindings(env: WorkerEnv, options = listOptions(new URL
     }));
     return { items: accountBindings, meta: listMeta(accountBindings, options) };
   } catch {
-    const rows = await selectRows<{
-      id: string;
-      platform: PlatformValue;
-      account_name: string;
-      account_url: string | null;
-      created_at: string;
-      distributor_profiles: { display_name: string } | null;
-    }>(
-      env,
-      "social_accounts",
-      buildListQuery(
-        "select=id,platform,account_name,account_url,created_at,distributor_profiles(display_name)",
-        "order=created_at.desc",
-        options,
-        [options.platform ? filterParam("platform", "eq", options.platform) : undefined, searchQuery(["account_name", "account_url"], options.q)]
+    const rows = await safeRows(() =>
+      selectRows<{
+        id: string;
+        platform: PlatformValue;
+        account_name: string;
+        account_url: string | null;
+        created_at: string;
+        distributor_profiles: { display_name: string } | null;
+      }>(
+        env,
+        "social_accounts",
+        buildListQuery(
+          "select=id,platform,account_name,account_url,created_at,distributor_profiles(display_name)",
+          "order=created_at.desc",
+          options,
+          [options.platform ? filterParam("platform", "eq", options.platform) : undefined, searchQuery(["account_name", "account_url"], options.q)]
+        )
       )
     );
 
@@ -1616,6 +1723,57 @@ async function listAccountBindings(env: WorkerEnv, options = listOptions(new URL
     }));
     return { items: accountBindings, meta: listMeta(accountBindings, options) };
   }
+}
+
+async function listPartnerSocialAccounts(
+  env: WorkerEnv,
+  options = listOptions(new URLSearchParams()),
+  session?: RequestSession | null
+) {
+  const distributorFilter = await distributorFilterForSession(env, session ?? null);
+  const rows = await safeRows(() =>
+    selectRows<{
+      id: string;
+      platform: PlatformValue;
+      account_name: string;
+      account_url: string | null;
+      followers: number | null;
+      category: string | null;
+      status: AccountBindingStatus | null;
+      binding_note: string | null;
+      created_at: string;
+      distributor_profiles: { display_name: string } | null;
+    }>(
+      env,
+      "social_accounts",
+      buildListQuery(
+        "select=id,platform,account_name,account_url,followers,category,status,binding_note,created_at,distributor_profiles(display_name)",
+        "order=created_at.desc",
+        options,
+        [
+          distributorFilter,
+          options.status ? filterParam("status", "eq", options.status) : undefined,
+          options.platform ? filterParam("platform", "eq", options.platform) : undefined,
+          searchQuery(["account_name", "category", "account_url"], options.q)
+        ]
+      )
+    )
+  );
+
+  const accountBindings = rows.map((row) => ({
+    id: row.id,
+    distributorName: row.distributor_profiles?.display_name ?? "Unknown distributor",
+    platform: platformToLabel[row.platform],
+    accountName: row.account_name,
+    homepageUrl: row.account_url ?? "https://example.com/social-account",
+    followers: Number(row.followers ?? 0),
+    category: row.category ?? "未分类",
+    status: row.status ?? "pending",
+    boundAt: new Date(row.created_at).toLocaleString("zh-CN", { hour12: false }),
+    note: row.binding_note ?? ""
+  }));
+
+  return { items: accountBindings, meta: listMeta(accountBindings, options) };
 }
 
 async function listMaterials(env: WorkerEnv, options = listOptions(new URLSearchParams())) {
@@ -1667,28 +1825,30 @@ async function listMaterials(env: WorkerEnv, options = listOptions(new URLSearch
   }
 
   const [clips, claims, downloads] = await Promise.all([
-    selectRows<{
-      id: string;
-      title: string;
-      status: MaterialStatus;
-      tags: string[];
-      start_second: number | null;
-      end_second: number | null;
-      created_at: string;
-      ip_accounts: { name: string; platform: PlatformValue } | null;
-      clip_products: { products: { name: string } | null }[];
-    }>(
-      env,
-      "clip_assets",
-      buildListQuery(
-        "select=id,title,status,tags,start_second,end_second,created_at,ip_accounts(name,platform),clip_products(products(name))",
-        "order=created_at.desc",
-        options,
-        [options.status ? filterParam("status", "eq", options.status) : undefined]
+    safeRows(() =>
+      selectRows<{
+        id: string;
+        title: string;
+        status: MaterialStatus;
+        tags: string[];
+        start_second: number | null;
+        end_second: number | null;
+        created_at: string;
+        ip_accounts: { name: string; platform: PlatformValue } | null;
+        clip_products: { products: { name: string } | null }[];
+      }>(
+        env,
+        "clip_assets",
+        buildListQuery(
+          "select=id,title,status,tags,start_second,end_second,created_at,ip_accounts(name,platform),clip_products(products(name))",
+          "order=created_at.desc",
+          options,
+          [options.status ? filterParam("status", "eq", options.status) : undefined]
+        )
       )
     ),
-    selectRows<{ clip_asset_id: string }>(env, "clip_claims", "select=clip_asset_id"),
-    selectRows<{ clip_asset_id: string }>(env, "clip_downloads", "select=clip_asset_id")
+    safeRows(() => selectRows<{ clip_asset_id: string }>(env, "clip_claims", "select=clip_asset_id")),
+    safeRows(() => selectRows<{ clip_asset_id: string }>(env, "clip_downloads", "select=clip_asset_id"))
   ]);
 
   const claimsByClip = countBy(claims, (claim) => claim.clip_asset_id);
@@ -2663,6 +2823,7 @@ async function reviewAuthorizationRequest(env: WorkerEnv, requestId: string, inp
   if (pool && (pool.status !== "open" || (pool.total_quota > 0 && pool.used_quota >= pool.total_quota))) {
     throw new ApiError("authorization_pool_unavailable", "Authorization pool is paused or full", 409);
   }
+  const settings = await loadSystemSettings(env);
 
   const existing = await selectRows<{ id: string }>(
     env,
@@ -2675,7 +2836,7 @@ async function reviewAuthorizationRequest(env: WorkerEnv, requestId: string, inp
       status: "approved",
       social_account_id: request.social_account_id,
       authorization_pool_id: pool?.id,
-      daily_claim_limit: pool?.daily_claim_limit ?? 10,
+      daily_claim_limit: pool?.daily_claim_limit ?? settings.dailyClaimLimit,
       share_rate: pool?.default_share_rate ?? 30,
       paused_reason: null
     });
@@ -2687,7 +2848,7 @@ async function reviewAuthorizationRequest(env: WorkerEnv, requestId: string, inp
       authorization_pool_id: pool?.id,
       status: "approved",
       share_rate: pool?.default_share_rate ?? 30,
-      daily_claim_limit: pool?.daily_claim_limit ?? 10,
+      daily_claim_limit: pool?.daily_claim_limit ?? settings.dailyClaimLimit,
       starts_at: new Date().toISOString(),
       expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString()
     });
@@ -2828,7 +2989,8 @@ async function claimDistributionTask(
       `select=id&distributor_id=eq.${distributor.id}&claimed_at=gte.${encodeURIComponent(today)}`
     )
   );
-  const dailyLimit = Number(authorization.daily_claim_limit ?? 10);
+  const settings = await loadSystemSettings(env);
+  const dailyLimit = Number(authorization.daily_claim_limit ?? settings.dailyClaimLimit);
   if (dailyLimit > 0 && todayClaims.length >= dailyLimit) {
     throw new ApiError("daily_claim_limit_reached", "Daily claim limit has been reached", 409);
   }
@@ -3069,6 +3231,506 @@ async function createAppeal(env: WorkerEnv, input: z.infer<typeof appealSchema>,
   });
 }
 
+async function listPartnerAuthorizationRequests(
+  env: WorkerEnv,
+  options = listOptions(new URLSearchParams()),
+  session?: RequestSession | null
+) {
+  const distributorFilter = await distributorFilterForSession(env, session ?? null);
+  const rows = await safeRows(() =>
+    selectRows<{
+      id: string;
+      status: AuthorizationStatus;
+      application_note: string | null;
+      created_at: string;
+      distributor_profiles: { display_name: string; phone: string | null } | null;
+      ip_accounts: { name: string } | null;
+      social_accounts: { account_name: string; platform: PlatformValue } | null;
+    }>(
+      env,
+      "authorization_requests",
+      buildListQuery(
+        "select=id,status,application_note,created_at,distributor_profiles(display_name,phone),ip_accounts(name),social_accounts(account_name,platform)",
+        "order=created_at.desc",
+        options,
+        [
+          distributorFilter,
+          options.status ? filterParam("status", "eq", options.status) : undefined,
+          options.platform ? filterParam("social_accounts.platform", "eq", options.platform) : undefined,
+          searchQuery(["application_note"], options.q)
+        ]
+      )
+    )
+  );
+
+  const items = rows.map((row) => ({
+    id: row.id,
+    distributorName: row.distributor_profiles?.display_name ?? "Unknown distributor",
+    phone: row.distributor_profiles?.phone ?? "Pending phone",
+    socialAccount: row.social_accounts?.account_name ?? "Pending account",
+    platform: platformToLabel[row.social_accounts?.platform ?? "douyin"],
+    ipName: row.ip_accounts?.name ?? "Unknown IP",
+    status: row.status,
+    appliedAt: formatDateTime(row.created_at),
+    reason: row.application_note ?? ""
+  }));
+
+  return { items, meta: listMeta(items, options) };
+}
+
+async function updateAuthorizationLifecycle(env: WorkerEnv, authorizationId: string, action: "pause" | "resume", note = "") {
+  await patchRows(env, "authorizations", `id=eq.${authorizationId}`, {
+    status: action === "pause" ? "paused" : "approved",
+    paused_reason: action === "pause" ? note : null
+  });
+  await insertRow(env, "authorization_events", {
+    authorization_id: authorizationId,
+    event_type: action === "pause" ? "paused" : "resumed",
+    note
+  }).catch(() => undefined);
+}
+
+async function disableProduct(env: WorkerEnv, productId: string, note = "") {
+  await patchRows(env, "products", `id=eq.${productId}`, { is_active: false });
+  await insertRow(env, "audit_logs", {
+    action: "product.disable",
+    entity_type: "products",
+    entity_id: productId,
+    after_data: { is_active: false, note }
+  }).catch(() => undefined);
+}
+
+async function productCommissionHistory(env: WorkerEnv, productId: string, options = listOptions(new URLSearchParams())) {
+  const product = first(
+    await safeRows(() =>
+      selectRows<{
+        id: string;
+        name: string;
+        platform: PlatformValue;
+        commission_rate: number | string | null;
+        is_active: boolean;
+      }>(env, "products", `select=id,name,platform,commission_rate,is_active&id=eq.${productId}&limit=1`)
+    )
+  );
+  const rows = await safeRows(() =>
+    selectRows<{
+      id: string;
+      status: PublishStatus;
+      publish_url: string;
+      performance_snapshots: { gmv: number | string; commission_amount: number | string; captured_at: string }[];
+    }>(
+      env,
+      "publish_records",
+      buildListQuery(
+        "select=id,status,publish_url,performance_snapshots(gmv,commission_amount,captured_at)",
+        "order=submitted_at.desc",
+        options,
+        [filterParam("product_id", "eq", productId)]
+      )
+    )
+  );
+  const commissionHistory = rows.map((row) => {
+    const latest = row.performance_snapshots?.at(-1);
+    return {
+      publishRecordId: row.id,
+      status: row.status,
+      publishUrl: row.publish_url,
+      gmv: Number(latest?.gmv ?? 0),
+      commission: Number(latest?.commission_amount ?? 0),
+      capturedAt: latest?.captured_at ? formatDateTime(latest.captured_at) : null
+    };
+  });
+  return { product, commissionHistory, meta: listMeta(commissionHistory, options) };
+}
+
+async function verifyPublishRecord(env: WorkerEnv, publishRecordId: string, input: z.infer<typeof publishVerifySchema>) {
+  const records = await safeRows(() =>
+    selectRows<{
+      id: string;
+      distributor_id: string | null;
+      publish_url: string | null;
+      products: { is_active: boolean; commission_rate: number | null; affiliate_url: string | null } | null;
+    }>(
+      env,
+      "publish_records",
+      `select=id,distributor_id,publish_url,products(is_active,commission_rate,affiliate_url)&id=eq.${publishRecordId}&limit=1`
+    )
+  );
+  const record = first(records);
+  if (!record) throw new ApiError("not_found", "Publish record not found", 404);
+  const settings = await loadSystemSettings(env);
+  const riskText = (record.publish_url ?? "").toLowerCase();
+  const matchedRiskKeyword =
+    settings.riskKeywords.find((keyword) => keyword.trim() && riskText.includes(keyword.trim().toLowerCase())) ??
+    (/risk|violation|blocked/i.test(record.publish_url ?? "") ? "risk" : "");
+  const hasRiskUrl = Boolean(matchedRiskKeyword);
+  const isVerified = input.result === "verified" && !hasRiskUrl && isUsableProduct(record.products);
+  const status: PublishStatus = isVerified ? "verified" : "invalid";
+  const reason =
+    input.reason ??
+    (hasRiskUrl
+      ? `Publish URL matched risk keyword: ${matchedRiskKeyword}`
+      : isUsableProduct(record.products)
+        ? "Manual verification"
+        : "Product is disabled or invalid");
+
+  await patchRows(env, "publish_records", `id=eq.${publishRecordId}`, {
+    status,
+    verified_at: status === "verified" ? new Date().toISOString() : null,
+    verification_note: reason
+  });
+  await insertRow(env, "publish_verification_results", {
+    publish_record_id: publishRecordId,
+    result: status,
+    reason
+  }).catch(() => undefined);
+  if (status === "invalid" && record.distributor_id) {
+    await insertRow(env, "risk_events", {
+      distributor_id: record.distributor_id,
+      publish_record_id: publishRecordId,
+      title: "Publish verification risk",
+      description: reason,
+      status: "open"
+    }).catch(() => undefined);
+  }
+}
+
+async function bulkReviewPublishRecords(env: WorkerEnv, input: z.infer<typeof publishBulkReviewSchema>) {
+  for (const id of input.ids) {
+    await verifyPublishRecord(env, id, { result: input.result, reason: input.reason });
+  }
+}
+
+async function updateSettlementAction(env: WorkerEnv, settlementId: string, action: "confirm" | "pay", note = "") {
+  const settlement = first(
+    await safeRows(() =>
+      selectRows<{ id: string; distributor_id: string; total_amount: number | string; status: SettlementStatus }>(
+        env,
+        "settlement_orders",
+        `select=id,distributor_id,total_amount,status&id=eq.${settlementId}&limit=1`
+      )
+    )
+  );
+  if (!settlement) throw new ApiError("not_found", "Settlement not found", 404);
+
+  const status: SettlementStatus = action === "confirm" ? "confirmed" : "paid";
+  await patchRows(env, "settlement_orders", `id=eq.${settlementId}`, { status });
+  if (action === "pay") {
+    await insertRow(env, "payment_records", {
+      settlement_order_id: settlement.id,
+      distributor_id: settlement.distributor_id,
+      amount: Number(settlement.total_amount ?? 0),
+      status: "paid",
+      payment_note: note,
+      paid_at: new Date().toISOString()
+    }).catch(() => undefined);
+    await insertRow(env, "wallet_transactions", {
+      distributor_id: settlement.distributor_id,
+      type: "payout",
+      amount: Number(settlement.total_amount ?? 0),
+      status: "paid",
+      source: settlement.id,
+      note
+    }).catch(() => undefined);
+  }
+}
+
+async function generateSettlementPeriod(env: WorkerEnv, input: z.infer<typeof settlementPeriodSchema>) {
+  await insertRow(env, "settlement_periods", {
+    period: input.period,
+    status: "calculating"
+  }).catch(() => undefined);
+  await generateSettlement(env);
+  await patchRows(env, "settlement_periods", `period=eq.${input.period}`, { status: "completed" }).catch(() => undefined);
+}
+
+async function createSettlementDispute(env: WorkerEnv, settlementId: string, input: z.infer<typeof settlementDisputeSchema>, session: RequestSession) {
+  const distributor = await findOrCreateDistributorForSession(env, session, DEFAULT_DISTRIBUTOR_NAME, "186****7108");
+  await insertRow(env, "settlement_disputes", {
+    settlement_order_id: settlementId,
+    distributor_id: distributor.id,
+    reason: input.reason,
+    status: "open"
+  });
+}
+
+async function reviewAppeal(env: WorkerEnv, appealId: string, input: z.infer<typeof appealReviewSchema>) {
+  await patchRows(env, "appeals", `id=eq.${appealId}`, {
+    status: input.status,
+    handled_note: input.handledNote ?? ""
+  });
+}
+
+async function listPerformanceImports(env: WorkerEnv, options = listOptions(new URLSearchParams())) {
+  const rows = await safeRows(() =>
+    selectRows<{
+      id: string;
+      file_name: string;
+      status: string;
+      total_rows: number;
+      matched_rows: number;
+      error_rows: number;
+      created_at: string;
+    }>(
+      env,
+      "performance_import_batches",
+      buildListQuery("select=id,file_name,status,total_rows,matched_rows,error_rows,created_at", "order=created_at.desc", options, [])
+    )
+  );
+  const performanceImports = rows.map((row) => ({
+    id: row.id,
+    fileName: row.file_name,
+    status: row.status,
+    totalRows: Number(row.total_rows ?? 0),
+    matchedRows: Number(row.matched_rows ?? 0),
+    errorRows: Number(row.error_rows ?? 0),
+    createdAt: formatDateTime(row.created_at)
+  }));
+  return { items: performanceImports, meta: listMeta(performanceImports, options) };
+}
+
+async function getPerformanceImport(env: WorkerEnv, id: string) {
+  const rows = await safeRows(() =>
+    selectRows<{
+      id: string;
+      file_name: string;
+      status: string;
+      total_rows: number;
+      matched_rows: number;
+      error_rows: number;
+      created_at: string;
+    }>(env, "performance_import_batches", `select=id,file_name,status,total_rows,matched_rows,error_rows,created_at&id=eq.${id}&limit=1`)
+  );
+  const row = first(rows);
+  if (!row) throw new ApiError("not_found", "Performance import not found", 404);
+  return {
+    id: row.id,
+    fileName: row.file_name,
+    status: row.status,
+    totalRows: Number(row.total_rows ?? 0),
+    matchedRows: Number(row.matched_rows ?? 0),
+    errorRows: Number(row.error_rows ?? 0),
+    createdAt: formatDateTime(row.created_at)
+  };
+}
+
+async function listPerformanceImportErrors(env: WorkerEnv, batchId: string, options = listOptions(new URLSearchParams())) {
+  const rows = await safeRows(() =>
+    selectRows<{
+      id: string;
+      error_code: string;
+      error_message: string;
+      created_at: string;
+    }>(
+      env,
+      "performance_import_errors",
+      buildListQuery("select=id,error_code,error_message,created_at", "order=created_at.desc", options, [filterParam("batch_id", "eq", batchId)])
+    )
+  );
+  const errors = rows.map((row) => ({
+    id: row.id,
+    errorCode: row.error_code,
+    errorMessage: row.error_message,
+    createdAt: formatDateTime(row.created_at)
+  }));
+  return { items: errors, meta: listMeta(errors, options) };
+}
+
+async function createPerformanceImport(env: WorkerEnv, input: z.infer<typeof performanceImportSchema>) {
+  const batch = await insertRow<{ id: string }>(env, "performance_import_batches", {
+    file_name: input.fileName,
+    status: "processing",
+    total_rows: input.rows.length,
+    matched_rows: 0,
+    error_rows: 0
+  });
+  let matchedRows = 0;
+  let errorRows = 0;
+
+  for (const row of input.rows) {
+    const publishRecord = row.publishRecordId
+      ? { id: row.publishRecordId }
+      : first(
+          await safeRows(() =>
+            selectRows<{ id: string }>(
+              env,
+              "publish_records",
+              `select=id&${filterParam("publish_url", "eq", row.publishUrl ?? "missing")}&limit=1`
+            )
+          )
+        );
+    const importRow = await insertRow<{ id: string }>(env, "performance_import_rows", {
+      batch_id: batch.id,
+      publish_url: row.publishUrl ?? null,
+      platform: row.platform ? toPlatformValue(row.platform) : null,
+      gmv: row.gmv,
+      commission_amount: row.commission,
+      raw_row: row,
+      matched_publish_record_id: publishRecord?.id ?? null
+    });
+    if (publishRecord?.id) {
+      matchedRows += 1;
+      await importPerformance(env, publishRecord.id, row.gmv, row.commission);
+    } else {
+      errorRows += 1;
+      await insertRow(env, "performance_import_errors", {
+        batch_id: batch.id,
+        row_id: importRow.id,
+        error_code: "unmatched_publish_record",
+        error_message: "No publish record matched this row"
+      }).catch(() => undefined);
+    }
+  }
+
+  await patchRows(env, "performance_import_batches", `id=eq.${batch.id}`, {
+    status: errorRows > 0 ? "completed_with_errors" : "completed",
+    matched_rows: matchedRows,
+    error_rows: errorRows
+  });
+  return batch.id;
+}
+
+async function listFfmpegJobs(env: WorkerEnv, options = listOptions(new URLSearchParams())) {
+  const rows = await safeRows(() =>
+    selectRows<{
+      id: string;
+      status: string;
+      payload: Record<string, unknown> | null;
+      last_error: string | null;
+      queued_at: string | null;
+      updated_at: string | null;
+    }>(
+      env,
+      "clip_tasks",
+      buildListQuery("select=id,status,payload,last_error,queued_at,updated_at", "order=queued_at.desc", options, [])
+    )
+  );
+  const ffmpegJobs = rows.map((row) => ({
+    id: row.id,
+    status: publicFfmpegStatus(row.status, row.payload),
+    payload: row.payload ?? {},
+    message: row.last_error ?? "",
+    queuedAt: formatDateTime(row.queued_at),
+    updatedAt: formatDateTime(row.updated_at)
+  }));
+  return { items: ffmpegJobs, meta: listMeta(ffmpegJobs, options) };
+}
+
+function publicFfmpegStatus(dbStatus: string, payload: Record<string, unknown> | null) {
+  if (payload?.externalConfigured === false && dbStatus === "queued") return "pending_external_config";
+  if (dbStatus === "running") return "processing";
+  if (dbStatus === "succeeded") return "completed";
+  return dbStatus;
+}
+
+function ffmpegTaskStatus(status: z.infer<typeof ffmpegJobPatchSchema>["status"] | "queued") {
+  if (status === "processing") return "running";
+  if (status === "completed") return "succeeded";
+  if (status === "pending_external_config") return "queued";
+  return status;
+}
+
+async function createFfmpegJob(env: WorkerEnv, input: z.infer<typeof ffmpegJobSchema>) {
+  const config = await loadIntegrationRuntimeConfig(env, "ffmpeg");
+  const isConfigured = Boolean(
+    config.enabled &&
+      config.validation.status === "configured" &&
+      config.publicConfig.endpoint &&
+      config.secrets.token
+  );
+  const status = isConfigured ? "queued" : "pending_external_config";
+  const payload = {
+    type: "ffmpeg.job",
+    sourceClipTaskId: input.clipTaskId,
+    r2Key: input.r2Key,
+    outputPrefix: input.outputPrefix ?? "",
+    externalConfigured: isConfigured
+  };
+  const updated = isUuid(input.clipTaskId)
+    ? await patchRows<{ id: string }>(env, "clip_tasks", `id=eq.${input.clipTaskId}`, {
+        status: ffmpegTaskStatus(status),
+        payload: {
+          ...payload
+        },
+        last_error: isConfigured ? null : "FFmpeg worker endpoint is not configured",
+        updated_at: new Date().toISOString()
+      })
+    : [];
+  const existing = first(updated);
+  const job =
+    existing ??
+    (await insertRow<{ id: string }>(env, "clip_tasks", {
+      id: isUuid(input.clipTaskId) ? input.clipTaskId : undefined,
+      type: "ffmpeg.job",
+      dedupe_key: `ffmpeg:${input.clipTaskId}:${input.r2Key}`,
+      r2_key: input.r2Key,
+      status: ffmpegTaskStatus(status),
+      payload: {
+        ...payload
+      },
+      last_error: isConfigured ? null : "FFmpeg worker endpoint is not configured"
+    }));
+  return {
+    id: job.id,
+    status,
+    externalConfigured: isConfigured,
+    message: isConfigured ? "Queued for FFmpeg worker" : "FFmpeg worker endpoint is not configured"
+  };
+}
+
+async function getFfmpegJob(env: WorkerEnv, id: string) {
+  const row = first(
+    await safeRows(() =>
+      selectRows<{
+        id: string;
+        status: string;
+        payload: Record<string, unknown> | null;
+        last_error: string | null;
+        queued_at: string | null;
+        updated_at: string | null;
+      }>(env, "clip_tasks", `select=id,status,payload,last_error,queued_at,updated_at&id=eq.${id}&limit=1`)
+    )
+  );
+  if (!row) throw new ApiError("not_found", "FFmpeg job not found", 404);
+  return {
+    id: row.id,
+    status: publicFfmpegStatus(row.status, row.payload),
+    payload: row.payload ?? {},
+    message: row.last_error ?? "",
+    queuedAt: formatDateTime(row.queued_at),
+    updatedAt: formatDateTime(row.updated_at)
+  };
+}
+
+async function updateFfmpegJob(env: WorkerEnv, id: string, input: z.infer<typeof ffmpegJobPatchSchema>) {
+  await patchRows(env, "clip_tasks", `id=eq.${id}`, {
+    status: ffmpegTaskStatus(input.status),
+    last_error: input.status === "failed" ? input.message ?? "FFmpeg job failed" : null,
+    updated_at: new Date().toISOString()
+  });
+  await insertRow(env, "clip_task_logs", {
+    clip_task_id: id,
+    level: input.status === "failed" ? "error" : "info",
+    message: input.message ?? `FFmpeg job ${input.status}`
+  }).catch(() => undefined);
+}
+
+async function handleFfmpegWebhook(env: WorkerEnv, request: Request) {
+  const config = await loadIntegrationRuntimeConfig(env, "ffmpeg");
+  const configuredToken = config.enabled ? config.secrets.token : "";
+  if (configuredToken) {
+    const token = bearerToken(request);
+    if (token !== configuredToken) {
+      throw new ApiError("forbidden", "Invalid FFmpeg webhook token", 403);
+    }
+  } else if (!isMockAuthAllowed(env)) {
+    throw new ApiError("integration_not_configured", "FFmpeg webhook token is not configured", 503);
+  }
+  const input = await readJson(request, ffmpegWebhookSchema);
+  await updateFfmpegJob(env, input.jobId, { status: input.status, message: input.message });
+  return input.jobId;
+}
+
 async function markNotificationRead(env: WorkerEnv, notificationId: string, session?: RequestSession | null) {
   await insertRow(env, "notification_reads", {
     notification_id: notificationId,
@@ -3125,46 +3787,6 @@ async function resetState(env: WorkerEnv) {
   await seedDemoData(env);
 }
 
-function integrationStatus(env: WorkerEnv) {
-  const groups = [
-    {
-      key: "supabase",
-      required: ["NEXT_PUBLIC_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_ANON_KEY", "SUPABASE_SERVICE_ROLE_KEY"]
-    },
-    {
-      key: "cloudflareR2",
-      required: ["CLIP_PARTNER_BUCKET"]
-    },
-    {
-      key: "r2DirectUpload",
-      required: ["R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET_NAME"]
-    },
-    {
-      key: "cloudflareQueue",
-      required: ["CLIP_TASK_QUEUE"]
-    },
-    {
-      key: "wechatOAuth",
-      required: ["WECHAT_OAUTH_APP_ID", "WECHAT_OAUTH_APP_SECRET", "WECHAT_OAUTH_REDIRECT_URI"]
-    },
-    {
-      key: "ffmpegWorker",
-      required: ["FFMPEG_WORKER_ENDPOINT", "FFMPEG_WORKER_TOKEN"]
-    }
-  ];
-
-  return groups.map((group) => {
-    const configured = group.required.filter((key) => Boolean(env[key as keyof WorkerEnv]));
-    return {
-      key: group.key,
-      configuredCount: configured.length,
-      totalCount: group.required.length,
-      missingKeys: group.required.filter((key) => !env[key as keyof WorkerEnv]),
-      isConfigured: configured.length === group.required.length
-    };
-  });
-}
-
 async function readBody<T>(request: Request) {
   return request.json().catch(() => ({})) as Promise<T>;
 }
@@ -3197,16 +3819,6 @@ function mockSession(session?: RequestSession) {
       platformDataProvider: "mock",
       paymentProvider: "manual"
     }
-  };
-}
-
-function notImplementedContract(path: string, method: string) {
-  return {
-    accepted: true,
-    mode: "contract_stub",
-    path,
-    method,
-    message: "The endpoint contract is reserved for the full ClipPartner upgrade and currently uses local/mock state."
   };
 }
 
@@ -3253,7 +3865,7 @@ export async function handleApiRequest(request: Request, env: WorkerEnv, ctx: Ex
       }
 
       if (url.pathname === "/integrations") {
-        return json({ integrations: integrationStatus(env) }, env);
+        return json({ integrations: await integrationReadiness(env) }, env);
       }
 
       if (url.pathname === "/me") {
@@ -3261,6 +3873,41 @@ export async function handleApiRequest(request: Request, env: WorkerEnv, ctx: Ex
       }
 
       const requestSession = await authorizeRequest(request, env, url.pathname);
+
+      if (url.pathname === "/admin/settings" && request.method === "GET") {
+        return json({ settings: await loadSystemSettings(env) }, env);
+      }
+
+      if (url.pathname === "/admin/settings" && request.method === "PATCH") {
+        const settings = await saveSystemSettings(env, await readJson(request, systemSettingsPatchSchema));
+        return json({ settings }, env);
+      }
+
+      const adminIntegrationTestMatch = url.pathname.match(/^\/admin\/integrations\/([^/]+)\/test$/);
+      if (adminIntegrationTestMatch && request.method === "POST") {
+        const parsedKey = integrationProviderKeySchema.safeParse(adminIntegrationTestMatch[1]);
+        if (!parsedKey.success) throw new ApiError("unknown_integration", "Unknown integration provider", 404);
+        const result = await testIntegrationConfig(env, parsedKey.data);
+        return json({ result }, env);
+      }
+
+      const adminIntegrationMatch = url.pathname.match(/^\/admin\/integrations\/([^/]+)$/);
+      if (adminIntegrationMatch && request.method === "GET") {
+        const parsedKey = integrationProviderKeySchema.safeParse(adminIntegrationMatch[1]);
+        if (!parsedKey.success) throw new ApiError("unknown_integration", "Unknown integration provider", 404);
+        return json({ integration: redactIntegrationConfig(await loadIntegrationConfig(env, parsedKey.data)) }, env);
+      }
+
+      if (adminIntegrationMatch && request.method === "PATCH") {
+        const parsedKey = integrationProviderKeySchema.safeParse(adminIntegrationMatch[1]);
+        if (!parsedKey.success) throw new ApiError("unknown_integration", "Unknown integration provider", 404);
+        const integration = await saveIntegrationConfig(
+          env,
+          parsedKey.data as IntegrationProviderKey,
+          await readJson(request, integrationConfigPatchSchema)
+        );
+        return json({ integration }, env);
+      }
 
       if (url.pathname === "/admin/distributors" && request.method === "GET") {
         const { items, meta } = await listDistributors(env, listOptions(url.searchParams));
@@ -3413,29 +4060,143 @@ export async function handleApiRequest(request: Request, env: WorkerEnv, ctx: Ex
         return json(await listState(env), env);
       }
 
-      if (
-        [
-          "/partner/social-accounts",
-          "/partner/authorization-requests",
-          "/admin/performance-imports",
-          "/admin/settlement-periods/generate",
-          "/ffmpeg/jobs",
-          "/ffmpeg/webhook"
-        ].includes(url.pathname) ||
-        /^\/admin\/authorizations\/[^/]+\/(pause|resume)$/.test(url.pathname) ||
-        /^\/admin\/products\/[^/]+\/commission-history$/.test(url.pathname) ||
-        /^\/admin\/products\/[^/]+\/disable$/.test(url.pathname) ||
-        /^\/admin\/performance-imports\/[^/]+(\/errors)?$/.test(url.pathname) ||
-        /^\/admin\/publish-records\/[^/]+\/verify$/.test(url.pathname) ||
-        /^\/admin\/publish-records\/bulk-review$/.test(url.pathname) ||
-        /^\/admin\/settlements\/[^/]+\/(confirm|pay)$/.test(url.pathname) ||
-        /^\/partner\/settlements\/[^/]+\/dispute$/.test(url.pathname) ||
-        /^\/admin\/appeals\/[^/]+$/.test(url.pathname) ||
-        /^\/ffmpeg\/jobs\/[^/]+$/.test(url.pathname)
-      ) {
-        return json(notImplementedContract(url.pathname, request.method), env, {
-          status: request.method === "GET" ? 200 : 202
-        });
+      if (url.pathname === "/partner/social-accounts" && request.method === "GET") {
+        const { items, meta } = await listPartnerSocialAccounts(env, listOptions(url.searchParams), requirePartnerSession(requestSession));
+        return json({ accountBindings: items, meta }, env);
+      }
+
+      if (url.pathname === "/partner/social-accounts" && request.method === "POST") {
+        await createAccountBinding(env, await readJson(request, accountBindingSchema), requirePartnerSession(requestSession));
+        return json(await listState(env), env, { status: 201 });
+      }
+
+      if (url.pathname === "/partner/authorization-requests" && request.method === "GET") {
+        const { items, meta } = await listPartnerAuthorizationRequests(
+          env,
+          listOptions(url.searchParams),
+          requirePartnerSession(requestSession)
+        );
+        return json({ authorizationRequests: items, meta }, env);
+      }
+
+      if (url.pathname === "/partner/authorization-requests" && request.method === "POST") {
+        await createAuthorizationRequest(env, await readJson(request, authorizationRequestSchema), requirePartnerSession(requestSession));
+        return json(await listState(env), env, { status: 201 });
+      }
+
+      const adminAuthorizationLifecycleMatch = url.pathname.match(/^\/admin\/authorizations\/([^/]+)\/(pause|resume)$/);
+      if (adminAuthorizationLifecycleMatch && request.method === "POST") {
+        const body = await readJson(request, reasonSchema);
+        await updateAuthorizationLifecycle(
+          env,
+          adminAuthorizationLifecycleMatch[1],
+          adminAuthorizationLifecycleMatch[2] as "pause" | "resume",
+          body.reason ?? body.note ?? ""
+        );
+        return json(await listState(env), env);
+      }
+
+      const adminProductDisableMatch = url.pathname.match(/^\/admin\/products\/([^/]+)\/disable$/);
+      if (adminProductDisableMatch && request.method === "POST") {
+        const body = await readJson(request, reasonSchema);
+        await disableProduct(env, adminProductDisableMatch[1], body.reason ?? body.note ?? "");
+        return json(await listState(env), env);
+      }
+
+      const adminProductCommissionMatch = url.pathname.match(/^\/admin\/products\/([^/]+)\/commission-history$/);
+      if (adminProductCommissionMatch && request.method === "GET") {
+        return json(await productCommissionHistory(env, adminProductCommissionMatch[1], listOptions(url.searchParams)), env);
+      }
+
+      const adminPublishVerifyMatch = url.pathname.match(/^\/admin\/publish-records\/([^/]+)\/verify$/);
+      if (adminPublishVerifyMatch && request.method === "POST") {
+        await verifyPublishRecord(env, adminPublishVerifyMatch[1], await readJson(request, publishVerifySchema));
+        return json(await listState(env), env);
+      }
+
+      if (url.pathname === "/admin/publish-records/bulk-review" && request.method === "POST") {
+        await bulkReviewPublishRecords(env, await readJson(request, publishBulkReviewSchema));
+        return json(await listState(env), env);
+      }
+
+      if (url.pathname === "/admin/performance-imports" && request.method === "GET") {
+        const { items, meta } = await listPerformanceImports(env, listOptions(url.searchParams));
+        return json({ performanceImports: items, meta }, env);
+      }
+
+      if (url.pathname === "/admin/performance-imports" && request.method === "POST") {
+        const importId = await createPerformanceImport(env, await readJson(request, performanceImportSchema));
+        return json({ ...(await listState(env)), performanceImport: await getPerformanceImport(env, importId) }, env, { status: 201 });
+      }
+
+      const adminPerformanceImportMatch = url.pathname.match(/^\/admin\/performance-imports\/([^/]+)$/);
+      if (adminPerformanceImportMatch && request.method === "GET") {
+        return json({ performanceImport: await getPerformanceImport(env, adminPerformanceImportMatch[1]) }, env);
+      }
+
+      const adminPerformanceImportErrorsMatch = url.pathname.match(/^\/admin\/performance-imports\/([^/]+)\/errors$/);
+      if (adminPerformanceImportErrorsMatch && request.method === "GET") {
+        const { items, meta } = await listPerformanceImportErrors(env, adminPerformanceImportErrorsMatch[1], listOptions(url.searchParams));
+        return json({ errors: items, meta }, env);
+      }
+
+      const adminSettlementActionMatch = url.pathname.match(/^\/admin\/settlements\/([^/]+)\/(confirm|pay)$/);
+      if (adminSettlementActionMatch && request.method === "POST") {
+        const body = await readJson(request, reasonSchema);
+        await updateSettlementAction(
+          env,
+          adminSettlementActionMatch[1],
+          adminSettlementActionMatch[2] as "confirm" | "pay",
+          body.reason ?? body.note ?? ""
+        );
+        return json(await listState(env), env);
+      }
+
+      if (url.pathname === "/admin/settlement-periods/generate" && request.method === "POST") {
+        await generateSettlementPeriod(env, await readJson(request, settlementPeriodSchema));
+        return json(await listState(env), env, { status: 201 });
+      }
+
+      const partnerSettlementDisputeMatch = url.pathname.match(/^\/partner\/settlements\/([^/]+)\/dispute$/);
+      if (partnerSettlementDisputeMatch && request.method === "POST") {
+        await createSettlementDispute(
+          env,
+          partnerSettlementDisputeMatch[1],
+          await readJson(request, settlementDisputeSchema),
+          requirePartnerSession(requestSession)
+        );
+        return json(await listState(env), env, { status: 201 });
+      }
+
+      const adminAppealMatch = url.pathname.match(/^\/admin\/appeals\/([^/]+)$/);
+      if (adminAppealMatch && request.method === "PATCH") {
+        await reviewAppeal(env, adminAppealMatch[1], await readJson(request, appealReviewSchema));
+        return json(await listState(env), env);
+      }
+
+      if (url.pathname === "/ffmpeg/jobs" && request.method === "GET") {
+        const { items, meta } = await listFfmpegJobs(env, listOptions(url.searchParams));
+        return json({ ffmpegJobs: items, meta }, env);
+      }
+
+      if (url.pathname === "/ffmpeg/jobs" && request.method === "POST") {
+        const ffmpegJob = await createFfmpegJob(env, await readJson(request, ffmpegJobSchema));
+        return json({ ffmpegJob }, env, { status: ffmpegJob.status === "pending_external_config" ? 202 : 201 });
+      }
+
+      const ffmpegJobMatch = url.pathname.match(/^\/ffmpeg\/jobs\/([^/]+)$/);
+      if (ffmpegJobMatch && request.method === "GET") {
+        return json({ ffmpegJob: await getFfmpegJob(env, ffmpegJobMatch[1]) }, env);
+      }
+
+      if (ffmpegJobMatch && request.method === "PATCH") {
+        await updateFfmpegJob(env, ffmpegJobMatch[1], await readJson(request, ffmpegJobPatchSchema));
+        return json({ ffmpegJob: await getFfmpegJob(env, ffmpegJobMatch[1]) }, env);
+      }
+
+      if (url.pathname === "/ffmpeg/webhook" && request.method === "POST") {
+        const jobId = await handleFfmpegWebhook(env, request);
+        return json({ accepted: true, jobId }, env, { status: 202 });
       }
 
       if (url.pathname === "/state" && request.method === "GET") {

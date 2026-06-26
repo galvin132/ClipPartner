@@ -27,7 +27,8 @@ export function mockHeadersForApiPath(path) {
     path.startsWith("/products") ||
     path.startsWith("/clip-tasks") ||
     path.startsWith("/publish-records") ||
-    path.startsWith("/risk-records")
+    path.startsWith("/risk-records") ||
+    path.startsWith("/ffmpeg/")
   ) {
     return {
       "x-clip-auth-provider": "mock",

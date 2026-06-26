@@ -20,3 +20,16 @@ test("Supabase migrations retract direct anon and authenticated business table a
   assert.match(migrationText, /revoke all on all tables in schema public from authenticated/i);
   assert.match(migrationText, /grant select, insert, update, delete on all tables in schema public to service_role/i);
 });
+
+test("Supabase migrations add backend configuration tables with RLS", () => {
+  assert.match(migrationText, /create table if not exists public\.system_settings/i);
+  assert.match(migrationText, /commission_share/i);
+  assert.match(migrationText, /risk_keywords/i);
+  assert.match(migrationText, /create table if not exists public\.integration_configs/i);
+  assert.match(migrationText, /encrypted_secrets/i);
+  assert.match(migrationText, /secret_fingerprints/i);
+  assert.match(migrationText, /alter table public\.system_settings enable row level security/i);
+  assert.match(migrationText, /alter table public\.integration_configs enable row level security/i);
+  assert.match(migrationText, /system_settings_service_role_all/i);
+  assert.match(migrationText, /integration_configs_service_role_all/i);
+});

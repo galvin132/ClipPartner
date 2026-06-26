@@ -84,12 +84,15 @@ Worker secrets：
 ```bash
 npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY --config workers/api/wrangler.toml
 npx wrangler secret put BETTER_AUTH_SECRET --config workers/api/wrangler.toml
+npx wrangler secret put CONFIG_ENCRYPTION_KEY --config workers/api/wrangler.toml
 npx wrangler secret put R2_ACCOUNT_ID --config workers/api/wrangler.toml
 npx wrangler secret put R2_ACCESS_KEY_ID --config workers/api/wrangler.toml
 npx wrangler secret put R2_SECRET_ACCESS_KEY --config workers/api/wrangler.toml
 npx wrangler secret put WECHAT_OAUTH_APP_SECRET --config workers/api/wrangler.toml
-npx wrangler secret put DOUYIN_APP_SECRET --config workers/api/wrangler.toml
-npx wrangler secret put WECHAT_CHANNELS_APP_SECRET --config workers/api/wrangler.toml
+npx wrangler secret put DOUYIN_CLIENT_SECRET --config workers/api/wrangler.toml
+npx wrangler secret put WECHAT_CHANNELS_CLIENT_SECRET --config workers/api/wrangler.toml
+npx wrangler secret put PAYMENT_PROVIDER_TOKEN --config workers/api/wrangler.toml
+npx wrangler secret put FFMPEG_WORKER_TOKEN --config workers/api/wrangler.toml
 ```
 
 生成 Better Auth secret：
@@ -97,6 +100,14 @@ npx wrangler secret put WECHAT_CHANNELS_APP_SECRET --config workers/api/wrangler
 ```bash
 openssl rand -base64 32
 ```
+
+生成后台集成密钥加密用的 `CONFIG_ENCRYPTION_KEY`：
+
+```bash
+openssl rand -base64 32
+```
+
+微信、抖音、视频号、腾讯认证、支付和 FFmpeg 的业务接口配置优先在 `/admin/settings` 维护；同名 Worker env/secrets 只作为本地联调或应急兜底。
 
 本地 Worker：
 

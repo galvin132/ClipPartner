@@ -32,6 +32,22 @@ export function routeRoles(pathname: string, method: string): UserRole[] | null 
     return ["admin", "finance"];
   }
 
+  if (pathname === "/ffmpeg/webhook") {
+    return null;
+  }
+
+  if (pathname.startsWith("/ffmpeg/")) {
+    return ["admin", "reviewer"];
+  }
+
+  if (pathname === "/admin/settings") {
+    return method === "GET" ? ["admin", "reviewer", "finance"] : ["admin"];
+  }
+
+  if (/^\/admin\/integrations\/[^/]+(\/test)?$/.test(pathname)) {
+    return method === "GET" ? ["admin", "reviewer", "finance"] : ["admin"];
+  }
+
   if (
     pathname === "/authorization-requests" ||
     pathname === "/account-bindings" ||
@@ -81,6 +97,10 @@ export function routeRoles(pathname: string, method: string): UserRole[] | null 
     if (pathname === "/state/reset" || pathname.startsWith("/settlements/") || pathname === "/settlements/generate") {
       return ["admin", "finance"];
     }
+  }
+
+  if (pathname.startsWith("/admin/performance-imports") || pathname === "/admin/settlement-periods/generate") {
+    return pathname === "/admin/settlement-periods/generate" ? ["admin", "finance"] : ["admin", "reviewer"];
   }
 
   if (pathname.startsWith("/admin/settlements")) {

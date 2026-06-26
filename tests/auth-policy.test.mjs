@@ -48,6 +48,18 @@ test("partner data routes require a partner role", () => {
   assert.deepEqual(routeRoles("/partner/tasks", "GET"), ["partner"]);
   assert.deepEqual(routeRoles("/partner/wallet", "GET"), ["partner"]);
   assert.deepEqual(routeRoles("/partner/authorizations", "GET"), ["partner"]);
+  assert.deepEqual(routeRoles("/partner/social-accounts", "GET"), ["partner"]);
+  assert.deepEqual(routeRoles("/partner/authorization-requests", "POST"), ["partner"]);
+  assert.deepEqual(routeRoles("/partner/settlements/settlement-1/dispute", "POST"), ["partner"]);
+});
+
+test("new operator routes map to reviewer and finance roles", () => {
+  assert.deepEqual(routeRoles("/admin/performance-imports", "GET"), ["admin", "reviewer"]);
+  assert.deepEqual(routeRoles("/admin/performance-imports/import-1/errors", "GET"), ["admin", "reviewer"]);
+  assert.deepEqual(routeRoles("/admin/settlements/settlement-1/pay", "POST"), ["admin", "finance"]);
+  assert.deepEqual(routeRoles("/admin/settlement-periods/generate", "POST"), ["admin", "finance"]);
+  assert.deepEqual(routeRoles("/ffmpeg/jobs", "POST"), ["admin", "reviewer"]);
+  assert.equal(routeRoles("/ffmpeg/webhook", "POST"), null);
 });
 
 test("task claim ownership filter scopes partner operations to one distributor", () => {

@@ -30,9 +30,13 @@ const apiPaths = [
   "/admin/authorization-pools?limit=1",
   "/admin/distribution-tasks?limit=1",
   "/admin/distributors?limit=1",
+  "/admin/performance-imports?limit=1",
+  "/ffmpeg/jobs?limit=1",
   "/partner/tasks?limit=1",
   "/partner/wallet?limit=1",
-  "/partner/authorizations?limit=1"
+  "/partner/authorizations?limit=1",
+  "/partner/social-accounts?limit=1",
+  "/partner/authorization-requests?limit=1"
 ];
 
 const targets = [
