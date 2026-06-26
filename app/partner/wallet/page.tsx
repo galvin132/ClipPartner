@@ -1,11 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { HandCoins, LogOut, WalletCards } from "lucide-react";
+import { HandCoins, LogOut, WalletCards, ArrowLeft, TrendingUp } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
 import { AuthGate } from "@/components/AuthGate";
 import { useAuth } from "@/components/AuthProvider";
+import { StatusBadge } from "@/components/Badge";
 import { money } from "@/lib/domain";
 import { useClipPartnerStore } from "@/lib/local-store";
 
@@ -20,8 +21,9 @@ export default function PartnerWalletPage() {
 function PartnerWalletExperience() {
   const router = useRouter();
   const { session, logout } = useAuth();
-  const { state, addWalletTransaction, refreshRemoteList } = useClipPartnerStore();
+  const { state, addWalletTransaction, syncStatus, refreshRemoteList } = useClipPartnerStore();
   const distributorName = session?.displayName ?? "";
+  
   useEffect(() => {
     void refreshRemoteList("walletTransactions", { limit: 50 });
     void refreshRemoteList("publishRecords", { limit: 50 });
@@ -46,32 +48,45 @@ function PartnerWalletExperience() {
 
   return (
     <div className="partner-shell">
-      <header className="partner-header">
-        <div className="partner-header-inner">
-          <div>
-            <div className="brand-title">收益钱包</div>
-            <div className="brand-subtitle">{distributorName} · 作品级收益、冻结和打款记录</div>
+      <header className="partner-header-modern">
+        <div className="partner-header-inner-modern">
+          <div className="partner-header-brand">
+            <div className="partner-brand-logo" />
+            <div>
+              <div className="partner-brand-title">我的收益钱包</div>
+              <div className="partner-brand-subtitle">
+                <span className="user-tag">{distributorName}</span>
+                <span className="dot-divider">·</span>
+                <span className="score-tag">累计已打款 <strong>{money(paid)}</strong></span>
+                <span className="dot-divider">·</span>
+                <span className="data-source-tag">{syncStatus === "remote" ? "线上实时" : "本地演示"}</span>
+              </div>
+            </div>
           </div>
-          <div className="toolbar">
-            <Link className="button" href="/partner/tasks">
-              任务中心
+          <div className="partner-header-actions">
+            <Link className="button partner-action-btn" href="/partner">
+              <ArrowLeft size={14} /> 返回工作台
             </Link>
-            <button className="button" aria-label="退出" onClick={handleLogout}>
-              <LogOut size={16} aria-hidden />
+            <Link className="button partner-action-btn" href="/partner/tasks">
+              领任务中心
+            </Link>
+            <button className="button partner-logout-btn" aria-label="退出" onClick={handleLogout}>
+              <LogOut size={15} />
+              <span>安全退出</span>
             </button>
           </div>
         </div>
       </header>
 
-      <main className="partner-main">
+      <main className="partner-main-modern">
         <div className="topbar">
           <div>
-            <p className="page-kicker">结算钱包</p>
-            <h1 className="page-title">按作品查看 GMV、佣金、分成和扣减原因</h1>
-            <p className="page-subtitle">当前先使用模拟结算流水，后续接真实精选联盟订单、退款和打款接口。</p>
+            <p className="page-kicker">佣金钱包与打款流水</p>
+            <h1 className="page-title">按作品实时查看 GMV、佣金分成和结算状态</h1>
+            <p className="page-subtitle">当前使用高保真演示流水，后续对接真实联盟订单状态与微信/支付宝打款电子回单接口。</p>
           </div>
           <button
-            className="button primary"
+            className="button primary-gradient-btn"
             onClick={() =>
               addWalletTransaction({
                 distributorName,
@@ -83,97 +98,136 @@ function PartnerWalletExperience() {
               })
             }
           >
-            <HandCoins size={16} aria-hidden /> 模拟补贴
+            <HandCoins size={15} /> 模拟补贴 +100元
           </button>
         </div>
 
-        <section className="metrics-grid">
-          <article className="metric-card">
+        <section className="metrics-grid" style={{ marginBottom: 28 }}>
+          <article className="metric-card metric-emerald">
             <div className="metric-label">
-              <WalletCards size={16} aria-hidden /> 可结算
+              <WalletCards size={16} /> 可提现金额
             </div>
             <div className="metric-value">{money(available)}</div>
-            <div className="metric-note">满足打款门槛后进入账期</div>
+            <div className="metric-note">满足平台 100 元打款门槛即可一键打款</div>
           </article>
-          <article className="metric-card">
-            <div className="metric-label">冻结金额</div>
+          <article className="metric-card metric-rose">
+            <div className="metric-label">
+              <WalletCards size={16} /> 冻结中金额
+            </div>
             <div className="metric-value">{money(frozen)}</div>
-            <div className="metric-note">风控、退款或申诉中</div>
+            <div className="metric-note">异常、退货或风控违规拦截的作品金额</div>
           </article>
-          <article className="metric-card">
-            <div className="metric-label">待打款</div>
+          <article className="metric-card metric-blue">
+            <div className="metric-label">
+              <TrendingUp size={16} /> 财务待确认
+            </div>
             <div className="metric-value">{money(pending)}</div>
-            <div className="metric-note">财务确认后打款</div>
+            <div className="metric-note">正在进入账期，打款流程处理中</div>
           </article>
-          <article className="metric-card">
-            <div className="metric-label">已打款</div>
+          <article className="metric-card metric-violet">
+            <div className="metric-label">
+              <HandCoins size={16} /> 累计已打款
+            </div>
             <div className="metric-value">{money(paid)}</div>
-            <div className="metric-note">保留打款凭证</div>
+            <div className="metric-note">包含扣除税费后的真实到账总金额</div>
           </article>
+        </section>
+
+        <section className="table-card" style={{ marginBottom: 28 }}>
+          <div className="table-header">
+            <h2 className="table-title">🎥 视频作品明细账单</h2>
+            <span className="badge info">默认按 20% 授权分成比例核算，风控及核验失败作品不予分账</span>
+          </div>
+          <div className="data-table-wrapper">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>关联作品 / 商品</th>
+                  <th>当前核验状态</th>
+                  <th>产生有效 GMV</th>
+                  <th>我获得的预估分账佣金</th>
+                  <th>风控/未分账理由</th>
+                </tr>
+              </thead>
+              <tbody>
+                {records.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="text-center text-muted" style={{ padding: "30px 0" }}>暂无关联视频作品的收益明细。</td>
+                  </tr>
+                ) : (
+                  records.map((record) => (
+                    <tr key={record.id}>
+                      <td>
+                        <div className="item-title">{record.materialTitle}</div>
+                        <div className="item-meta">{record.productName}</div>
+                      </td>
+                      <td>
+                        <StatusBadge status={record.status} />
+                      </td>
+                      <td className="text-bold text-emerald">{money(record.gmv)}</td>
+                      <td className="text-bold text-amber">
+                        {record.status === "verified" || record.status === "settled" ? money(record.gmv * 0.2) : money(0)}
+                      </td>
+                      <td style={{ fontSize: 13, color: record.status === "invalid" ? "var(--danger)" : "var(--muted)" }}>
+                        {record.status === "invalid" ? record.reviewNote || "作品审核未通过" : "已正常核验，待进入打款流程"}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
         </section>
 
         <section className="table-card">
           <div className="table-header">
-            <h2 className="table-title">作品收益明细</h2>
-            <span className="badge info">默认按授权分成比例计算，异常作品不结算</span>
+            <h2 className="table-title">💳 钱包收支流证明细</h2>
+            <span className="badge warning">包含平台扣罚、奖励、返现和打款留痕记录</span>
           </div>
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>作品 / 商品</th>
-                <th>状态</th>
-                <th>GMV</th>
-                <th>平台佣金</th>
-                <th>扣减原因</th>
-              </tr>
-            </thead>
-            <tbody>
-              {records.map((record) => (
-                <tr key={record.id}>
-                  <td>
-                    <div className="item-title">{record.materialTitle}</div>
-                    <div className="item-meta">{record.productName}</div>
-                  </td>
-                  <td>{record.status}</td>
-                  <td>{money(record.gmv)}</td>
-                  <td>{money(record.commission)}</td>
-                  <td>{record.status === "invalid" ? record.reviewNote || "作品不合规" : "正常进入结算"}</td>
+          <div className="data-table-wrapper">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>资金交易类型</th>
+                  <th>交易变动金额</th>
+                  <th>业务来源</th>
+                  <th>流水状态</th>
+                  <th>资金备注</th>
+                  <th>产生时间</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </section>
-
-        <section className="table-card" style={{ marginTop: 18 }}>
-          <div className="table-header">
-            <h2 className="table-title">钱包流水</h2>
-            <span className="badge warning">冻结流水会影响可提现金额</span>
+              </thead>
+              <tbody>
+                {transactions.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="text-center text-muted" style={{ padding: "30px 0" }}>暂无钱包收支明细。</td>
+                  </tr>
+                ) : (
+                  transactions.map((item) => (
+                    <tr key={item.id}>
+                      <td className="text-bold">{item.type === "adjustment" ? "资金调整/补贴" : item.type === "commission" ? "销售分成" : "提现扣减"}</td>
+                      <td className={`text-bold ${item.amount >= 0 ? "text-emerald" : "text-rose"}`}>
+                        {item.amount >= 0 ? "+" : ""}{money(item.amount)}
+                      </td>
+                      <td>
+                        <span className="badge info-badge-soft">{item.source}</span>
+                      </td>
+                      <td>
+                        <span className={`badge ${item.status === "available" ? "success" : item.status === "frozen" ? "danger" : "info"}`}>
+                          {item.status === "available" ? "可提现" : item.status === "frozen" ? "冻结中" : "已打款"}
+                        </span>
+                      </td>
+                      <td>
+                        <div className="item-title">{item.note}</div>
+                      </td>
+                      <td>
+                        <div className="item-meta">{item.createdAt}</div>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
           </div>
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>类型</th>
-                <th>金额</th>
-                <th>来源</th>
-                <th>状态</th>
-                <th>说明</th>
-              </tr>
-            </thead>
-            <tbody>
-              {transactions.map((item) => (
-                <tr key={item.id}>
-                  <td>{item.type}</td>
-                  <td>{money(item.amount)}</td>
-                  <td>{item.source}</td>
-                  <td>{item.status}</td>
-                  <td>
-                    <div className="item-title">{item.note}</div>
-                    <div className="item-meta">{item.createdAt}</div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
         </section>
       </main>
     </div>

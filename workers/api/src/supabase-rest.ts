@@ -25,8 +25,11 @@ export async function supabase<T>(env: WorkerEnv, path: string, init: RequestIni
   });
 
   if (!response.ok) {
-    const detail = await response.text();
-    throw new Error(`Supabase request failed ${response.status}: ${detail}`);
+    const detail = await response.text().catch(() => "");
+    const status = response.status >= 500 ? 502 : response.status === 401 || response.status === 403 ? 503 : 400;
+    throw new ApiError("supabase_request_failed", `Supabase ${response.status}: ${detail.slice(0, 500)}`, status, {
+      upstreamStatus: response.status
+    });
   }
 
   if (response.status === 204) {

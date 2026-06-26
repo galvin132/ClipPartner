@@ -22,11 +22,14 @@ function authBaseUrl(env: WorkerEnv, request: Request) {
 }
 
 function authSecret(env: WorkerEnv) {
-  // Production should set a dedicated BETTER_AUTH_SECRET. The service-role
-  // fallback keeps the gateway bootable while secrets are being migrated.
   if (env.BETTER_AUTH_SECRET) return env.BETTER_AUTH_SECRET;
+  if (env.APP_ENV === "production") {
+    throw new BetterAuthConfigurationError(
+      "Better Auth requires BETTER_AUTH_SECRET in production; do not reuse the Supabase service role key"
+    );
+  }
   if (env.SUPABASE_SERVICE_ROLE_KEY && env.SUPABASE_SERVICE_ROLE_KEY.length >= 32) return env.SUPABASE_SERVICE_ROLE_KEY;
-  return "clip-partner-local-better-auth-secret-change-before-production";
+  return "clip-partner-local-better-auth-secret-dev-only";
 }
 
 function authDatabase(env: WorkerEnv) {

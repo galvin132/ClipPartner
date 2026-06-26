@@ -33,3 +33,12 @@ test("Supabase migrations add backend configuration tables with RLS", () => {
   assert.match(migrationText, /system_settings_service_role_all/i);
   assert.match(migrationText, /integration_configs_service_role_all/i);
 });
+
+test("Supabase migrations add service-role audit events for risk and settlement side effects", () => {
+  assert.match(migrationText, /create table if not exists public\.audit_events/i);
+  assert.match(migrationText, /credit_adjust/i);
+  assert.match(migrationText, /wallet_freeze/i);
+  assert.match(migrationText, /settlement_block/i);
+  assert.match(migrationText, /alter table public\.audit_events enable row level security/i);
+  assert.match(migrationText, /audit_events_service_role_all/i);
+});

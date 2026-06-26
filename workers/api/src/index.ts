@@ -1,20 +1,18 @@
 /// <reference types="@cloudflare/workers-types" />
 
-import { AwsClient } from "aws4fetch";
 import { z } from "zod";
+import { runAuditedSideEffect } from "./audit.ts";
+import { isMockAuthAllowed, taskClaimOwnershipFilter, type UserRole } from "./auth-policy.ts";
 import {
-  allowMissingSessionForMockRead,
-  isMockAuthAllowed,
-  isUserRole,
-  routeRoles,
-  taskClaimOwnershipFilter,
-  type UserRole
-} from "./auth-policy.ts";
-import { handleBetterAuthRequest } from "./better-auth.ts";
+  createFfmpegJob,
+  getFfmpegJob,
+  handleFfmpegWebhook,
+  listFfmpegJobs,
+  updateFfmpegJob
+} from "./ffmpeg.ts";
 import {
   integrationReadiness,
   loadIntegrationConfig,
-  loadIntegrationRuntimeConfig,
   loadSystemSettings,
   redactIntegrationConfig,
   saveIntegrationConfig,
@@ -26,9 +24,45 @@ import type { WorkerEnv } from "./env.ts";
 import { ApiError } from "./errors.ts";
 import { createApiApp } from "./http-app.ts";
 import { corsHeaders, errorJson, json, logError, readJson } from "./http-utils.ts";
+import {
+  authorizeRequest,
+  bearerToken,
+  readRequestSession,
+  requirePartnerSession,
+  requireSession,
+  ROLE_LABELS,
+  type RequestSession
+} from "./session.ts";
 import { deleteByFilter, deleteRows, insertRow, patchRows, selectRows } from "./supabase-rest.ts";
+import {
+  buildListQuery,
+  countBy,
+  dateOnly,
+  eq,
+  filterParam,
+  first,
+  formatDateTime,
+  inList,
+  isUuid,
+  listMeta,
+  listOptions,
+  nextExpiry,
+  safeList,
+  safeRows,
+  searchQuery,
+  type ListMeta,
+  type ListOptions,
+  type PlatformValue
+} from "./query-utils.ts";
+import {
+  completeDirectUpload,
+  createDirectUpload,
+  queueClipTask,
+  uploadRecording,
+  type ClipTaskPayload,
+  type RecordingUploadMeta
+} from "./recordings.ts";
 
-type PlatformValue = "douyin" | "wechat_channels";
 const DOUYIN_LABEL = "\u6296\u97f3";
 const WECHAT_CHANNELS_LABEL = "\u89c6\u9891\u53f7";
 const DEFAULT_DISTRIBUTOR_NAME = "\u5468\u5a67";
@@ -59,46 +93,6 @@ type DistributionTaskStatus = "draft" | "open" | "paused" | "closed";
 type TaskClaimStatus = "claimed" | "downloaded" | "submitted" | "overdue" | "verified" | "invalid" | "settled";
 type WalletTransactionType = "commission" | "adjustment" | "freeze" | "payout";
 type WalletTransactionStatus = "available" | "frozen" | "pending" | "paid";
-type SessionProvider = "mock" | "supabase" | "better-auth";
-
-type RequestSession = {
-  id: string;
-  userId?: string;
-  role: UserRole;
-  displayName: string;
-  email?: string;
-  provider: SessionProvider;
-  isMock: boolean;
-};
-
-type SupabaseAuthUser = {
-  id: string;
-  email?: string;
-  phone?: string;
-  app_metadata?: Record<string, unknown>;
-  user_metadata?: Record<string, unknown>;
-};
-
-type BetterAuthSessionResponse = {
-  session?: {
-    id?: unknown;
-    token?: unknown;
-    userId?: unknown;
-  } | null;
-  user?: {
-    id?: unknown;
-    name?: unknown;
-    email?: unknown;
-    role?: unknown;
-  } | null;
-};
-
-const ROLE_LABELS: Record<UserRole, string> = {
-  admin: "\u7ba1\u7406\u5458",
-  reviewer: "\u5ba1\u6838\u5458",
-  finance: "\u8d22\u52a1",
-  partner: "\u5206\u53d1\u8005"
-};
 
 type AuthorizationRequestInput = {
   distributorName?: string;
@@ -143,61 +137,6 @@ type ClipTaskInput = {
   recordingTitle: string;
   ipName: string;
   sourcePlatform: string;
-};
-
-type DirectUploadInitInput = {
-  title: string;
-  ipName: string;
-  sourcePlatform: string;
-  fileName: string;
-  contentType?: string;
-  size?: number;
-};
-
-type DirectUploadCompleteInput = {
-  uploadId: string;
-  key: string;
-  title: string;
-  ipName: string;
-  sourcePlatform: string;
-};
-
-type RecordingUploadMeta = {
-  title: string;
-  ipName: string;
-  sourcePlatform: string;
-};
-
-type RecordingUploadResult = {
-  recordingId: string;
-  clipAssetId: string;
-  r2Key: string;
-  meta: RecordingUploadMeta;
-};
-
-type ClipTaskPayload = {
-  type: "clip.create" | "cron.scan";
-  taskId: string;
-  recordingId?: string;
-  clipAssetId?: string;
-  r2Key?: string;
-  meta?: RecordingUploadMeta;
-  createdAt: string;
-};
-
-type ListOptions = {
-  limit: number;
-  offset: number;
-  q?: string;
-  status?: string;
-  platform?: PlatformValue;
-};
-
-type ListMeta = {
-  limit: number;
-  offset: number;
-  count: number;
-  nextOffset: number | null;
 };
 
 const platformSchema = z.union([
@@ -542,283 +481,6 @@ function isUsableProduct(product?: {
   );
 }
 
-function roleFromAppMetadata(appMetadata: Record<string, unknown> | undefined): UserRole {
-  const role = typeof appMetadata?.role === "string" ? appMetadata.role : undefined;
-  if (role === "operator") return "reviewer";
-  const candidate = role ?? null;
-  if (isUserRole(candidate)) return candidate;
-  return "partner";
-}
-
-function displayNameFromAuthUser(user: SupabaseAuthUser, role: UserRole) {
-  const appDisplayName = user.app_metadata?.display_name;
-  const profileDisplayName = user.user_metadata?.display_name;
-  const fullName = user.user_metadata?.full_name;
-  const name = user.user_metadata?.name;
-  return (
-    (typeof appDisplayName === "string" && appDisplayName.trim()) ||
-    (typeof profileDisplayName === "string" && profileDisplayName.trim()) ||
-    (typeof fullName === "string" && fullName.trim()) ||
-    (typeof name === "string" && name.trim()) ||
-    user.email ||
-    user.phone ||
-    (role === "partner" ? DEFAULT_DISTRIBUTOR_NAME : ROLE_LABELS[role])
-  );
-}
-
-function bearerToken(request: Request) {
-  const authorization = request.headers.get("authorization") ?? "";
-  const match = authorization.match(/^Bearer\s+(.+)$/i);
-  return match?.[1]?.trim() || null;
-}
-
-function roleFromBetterAuthUser(user: BetterAuthSessionResponse["user"]): UserRole {
-  const role = typeof user?.role === "string" ? user.role : undefined;
-  if (role === "operator") return "reviewer";
-  const candidate = role ?? null;
-  if (isUserRole(candidate)) return candidate;
-  return "partner";
-}
-
-function displayNameFromBetterAuthUser(user: BetterAuthSessionResponse["user"], role: UserRole) {
-  return (
-    (typeof user?.name === "string" && user.name.trim()) ||
-    (typeof user?.email === "string" && user.email.trim()) ||
-    (role === "partner" ? DEFAULT_DISTRIBUTOR_NAME : ROLE_LABELS[role])
-  );
-}
-
-async function readBetterAuthSession(env: WorkerEnv, request: Request): Promise<RequestSession | null> {
-  const token = bearerToken(request);
-  const cookie = request.headers.get("cookie");
-  if (!token && !cookie) return null;
-
-  const sessionUrl = new URL("/api/auth/get-session", request.url);
-  const headers = new Headers();
-  if (token) headers.set("authorization", `Bearer ${token}`);
-  if (cookie) headers.set("cookie", cookie);
-
-  const response = await handleBetterAuthRequest(new Request(sessionUrl, { headers }), env);
-  if (response.status === 401 || response.status === 403) return null;
-  if (!response.ok) {
-    if (response.status === 503) return null;
-    throw new ApiError("auth_provider_error", "Better Auth session validation failed", 502, {
-      status: response.status
-    });
-  }
-
-  const payload = (await response.json()) as BetterAuthSessionResponse | null;
-  if (!payload?.session || !payload.user || typeof payload.user.id !== "string") return null;
-
-  const role = roleFromBetterAuthUser(payload.user);
-  return {
-    id: typeof payload.session.id === "string" ? payload.session.id : payload.user.id,
-    userId: payload.user.id,
-    role,
-    displayName: displayNameFromBetterAuthUser(payload.user, role),
-    email: typeof payload.user.email === "string" ? payload.user.email : undefined,
-    provider: "better-auth",
-    isMock: false
-  };
-}
-
-async function readSupabaseSession(env: WorkerEnv, request: Request): Promise<RequestSession | null> {
-  const token = bearerToken(request);
-  if (!token) return null;
-
-  if (!env.NEXT_PUBLIC_SUPABASE_URL || !env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
-    throw new ApiError("auth_not_configured", "Supabase Auth is not configured for token validation", 503);
-  }
-
-  const response = await fetch(`${env.NEXT_PUBLIC_SUPABASE_URL.replace(/\/$/, "")}/auth/v1/user`, {
-    headers: {
-      apikey: env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
-      authorization: `Bearer ${token}`
-    }
-  });
-
-  if (response.status === 401 || response.status === 403) {
-    throw new ApiError("invalid_token", "Supabase access token is invalid or expired", 401);
-  }
-
-  if (!response.ok) {
-    throw new ApiError("auth_provider_error", "Supabase Auth token validation failed", 502, {
-      status: response.status
-    });
-  }
-
-  const user = (await response.json()) as SupabaseAuthUser;
-  const role = roleFromAppMetadata(user.app_metadata);
-
-  return {
-    id: user.id,
-    userId: user.id,
-    role,
-    displayName: displayNameFromAuthUser(user, role),
-    email: user.email,
-    provider: "supabase",
-    isMock: false
-  };
-}
-
-function readMockSession(request: Request): RequestSession | null {
-  if (request.headers.get("x-clip-auth-provider") !== "mock") return null;
-
-  const role = request.headers.get("x-clip-role");
-  if (!isUserRole(role)) return null;
-
-  return {
-    id: request.headers.get("x-clip-user-id")?.trim() || `mock-${role}`,
-    role,
-    displayName: request.headers.get("x-clip-display-name")?.trim() || ROLE_LABELS[role],
-    provider: "mock",
-    isMock: true
-  };
-}
-
-async function readRequestSession(env: WorkerEnv, request: Request): Promise<RequestSession | null> {
-  return (
-    (await readBetterAuthSession(env, request)) ??
-    (await readSupabaseSession(env, request)) ??
-    (isMockAuthAllowed(env) ? readMockSession(request) : null)
-  );
-}
-
-async function authorizeRequest(request: Request, env: WorkerEnv, pathname: string) {
-  if (pathname === "/ffmpeg/webhook") {
-    return null;
-  }
-
-  const allowedRoles = routeRoles(pathname, request.method);
-  const session = await readRequestSession(env, request);
-
-  if (!allowedRoles) {
-    return session;
-  }
-
-  if (!session) {
-    if (allowMissingSessionForMockRead(env, request.method)) {
-      return null;
-    }
-    throw new ApiError("unauthenticated", "Missing ClipPartner session headers", 401);
-  }
-
-  if (!allowedRoles.includes(session.role)) {
-    throw new ApiError("forbidden", `Role ${session.role} cannot access ${pathname}`, 403, {
-      allowedRoles
-    });
-  }
-
-  return session;
-}
-
-function requireSession(session: RequestSession | null): RequestSession {
-  if (!session) {
-    throw new ApiError("unauthenticated", "A valid ClipPartner session is required", 401);
-  }
-  return session;
-}
-
-function requirePartnerSession(session: RequestSession | null): RequestSession {
-  const current = requireSession(session);
-  if (current.role !== "partner") {
-    throw new ApiError("forbidden", "This action requires a distributor session", 403);
-  }
-  return current;
-}
-
-function eq(column: string, value: string) {
-  return `${column}=eq.${encodeURIComponent(value)}`;
-}
-
-function inList(column: string, values: string[]) {
-  return `${column}=in.(${values.map((value) => encodeURIComponent(value)).join(",")})`;
-}
-
-function first<T>(rows: T[]) {
-  return rows[0];
-}
-
-function countBy<T>(items: T[], getKey: (item: T) => string | null | undefined) {
-  const counts = new Map<string, number>();
-  items.forEach((item) => {
-    const key = getKey(item);
-    if (!key) return;
-    counts.set(key, (counts.get(key) ?? 0) + 1);
-  });
-  return counts;
-}
-
-function listOptions(params: URLSearchParams): ListOptions {
-  const limit = Math.min(Math.max(Number(params.get("limit")) || 50, 1), 100);
-  const offset = Math.max(Number(params.get("offset")) || 0, 0);
-  const q = params.get("q")?.trim().slice(0, 80) || undefined;
-  const status = params.get("status")?.trim().slice(0, 40) || undefined;
-  const platformParam = params.get("platform")?.trim();
-  const platform =
-    platformParam === "douyin" || platformParam === DOUYIN_LABEL
-      ? "douyin"
-      : platformParam === "wechat_channels" || platformParam === WECHAT_CHANNELS_LABEL
-        ? "wechat_channels"
-        : undefined;
-
-  return { limit, offset, q, status, platform };
-}
-
-function listMeta<T>(items: T[], options: ListOptions): ListMeta {
-  return {
-    limit: options.limit,
-    offset: options.offset,
-    count: items.length,
-    nextOffset: items.length === options.limit ? options.offset + options.limit : null
-  };
-}
-
-async function safeRows<T>(read: () => Promise<T[]>) {
-  try {
-    return await read();
-  } catch (error) {
-    console.warn(
-      JSON.stringify({
-        level: "warn",
-        message: "Optional Supabase table or view is unavailable",
-        detail: error instanceof Error ? error.message : "Unknown error"
-      })
-    );
-    return [] as T[];
-  }
-}
-
-async function safeList<T>(read: () => Promise<{ items: T[]; meta: ListMeta }>) {
-  try {
-    return await read();
-  } catch (error) {
-    console.warn(
-      JSON.stringify({
-        level: "warn",
-        message: "Optional list endpoint failed",
-        detail: error instanceof Error ? error.message : "Unknown error"
-      })
-    );
-    const options = listOptions(new URLSearchParams());
-    return { items: [] as T[], meta: listMeta([], options) };
-  }
-}
-
-function formatDateTime(value: string | null | undefined) {
-  if (!value) return new Date().toLocaleString("zh-CN", { hour12: false });
-  return new Date(value).toLocaleString("zh-CN", { hour12: false });
-}
-
-function dateOnly(value: string | null | undefined) {
-  if (!value) return new Date().toISOString().slice(0, 10);
-  return new Date(value).toISOString().slice(0, 10);
-}
-
-function isUuid(value: string | undefined) {
-  return Boolean(value && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value));
-}
-
 function asOnboardingStatus(value: string | null | undefined): OnboardingStatus {
   if (
     value === "registered" ||
@@ -834,30 +496,6 @@ function asOnboardingStatus(value: string | null | undefined): OnboardingStatus 
     return value;
   }
   return "registered";
-}
-
-function nextExpiry(minutes: number) {
-  return new Date(Date.now() + minutes * 60 * 1000).toISOString();
-}
-
-function filterParam(column: string, operator: string, value: string) {
-  return `${column}=${operator}.${encodeURIComponent(value)}`;
-}
-
-function rangeQuery(options: ListOptions) {
-  return `limit=${options.limit}&offset=${options.offset}`;
-}
-
-function searchQuery(columns: string[], value: string | undefined) {
-  if (!value) return undefined;
-  const safeValue = value.replace(/[*,()]/g, " ").replace(/\s+/g, " ").trim();
-  if (!safeValue) return undefined;
-
-  return `or=${encodeURIComponent(`(${columns.map((column) => `${column}.ilike.*${safeValue}*`).join(",")})`)}`;
-}
-
-function buildListQuery(select: string, order: string, options: ListOptions, filters: Array<string | undefined>) {
-  return [select, order, rangeQuery(options), ...filters].filter(Boolean).join("&");
 }
 
 async function findOrCreateDistributor(
@@ -1193,196 +831,6 @@ async function completeManualClipTask(env: WorkerEnv, id: string) {
   );
 
   await updateManualClipTask(env, id, "completed");
-}
-
-function safeFileName(name: string) {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 120);
-}
-
-async function createRecordingAsset(env: WorkerEnv, meta: RecordingUploadMeta, key: string): Promise<RecordingUploadResult> {
-  const ip = await findOrCreateIp(env, meta.ipName, meta.sourcePlatform);
-  const recording = await insertRow<{ id: string }>(env, "live_recordings", {
-    ip_account_id: ip.id,
-    source_platform: toPlatformValue(meta.sourcePlatform),
-    live_date: new Date().toISOString().slice(0, 10),
-    title: meta.title,
-    r2_key: key
-  });
-
-  const clip = await insertRow<{ id: string }>(env, "clip_assets", {
-    live_recording_id: recording.id,
-    ip_account_id: ip.id,
-    title: `${meta.title} - pending clip`,
-    status: "processing",
-    tags: ["recording-upload", "pending-clip"],
-    start_second: 0,
-    end_second: 0
-  });
-
-  return {
-    recordingId: recording.id,
-    clipAssetId: clip.id,
-    r2Key: key,
-    meta
-  };
-}
-
-async function uploadRecording(env: WorkerEnv, request: Request): Promise<RecordingUploadResult> {
-  const form = await request.formData();
-  const file = form.get("file");
-  if (!(file instanceof File)) {
-    throw new ApiError("missing_recording_file", "Missing recording file", 400);
-  }
-
-  const meta: RecordingUploadMeta = {
-    title: String(form.get("title") || file.name || "Uploaded recording pending clip"),
-    ipName: String(form.get("ipName") || "Demo IP"),
-    sourcePlatform: String(form.get("sourcePlatform") || WECHAT_CHANNELS_LABEL)
-  };
-  const parsed = directUploadInitSchema
-    .pick({ title: true, ipName: true, sourcePlatform: true })
-    .safeParse(meta);
-  if (!parsed.success) {
-    throw new ApiError("validation_error", "Upload metadata validation failed", 422, z.flattenError(parsed.error));
-  }
-
-  const key = `recordings/${new Date().toISOString().slice(0, 10)}/${crypto.randomUUID()}-${safeFileName(file.name)}`;
-
-  await env.CLIP_PARTNER_BUCKET.put(key, file.stream(), {
-    httpMetadata: {
-      contentType: file.type || "application/octet-stream"
-    },
-    customMetadata: {
-      title: meta.title,
-      ipName: meta.ipName,
-      sourcePlatform: toPlatformValue(meta.sourcePlatform)
-    }
-  });
-
-  return createRecordingAsset(env, meta, key);
-}
-
-function requireR2Signing(env: WorkerEnv) {
-  const missing = ["R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET_NAME"].filter(
-    (key) => !env[key as keyof WorkerEnv]
-  );
-  if (missing.length) {
-    throw new ApiError("r2_signing_not_configured", "R2 direct upload signing is not configured", 503, { missing });
-  }
-
-  return {
-    accountId: env.R2_ACCOUNT_ID as string,
-    accessKeyId: env.R2_ACCESS_KEY_ID as string,
-    secretAccessKey: env.R2_SECRET_ACCESS_KEY as string,
-    bucketName: env.R2_BUCKET_NAME as string
-  };
-}
-
-async function createDirectUpload(env: WorkerEnv, input: DirectUploadInitInput) {
-  const config = requireR2Signing(env);
-  const uploadId = crypto.randomUUID();
-  const contentType = input.contentType || "application/octet-stream";
-  const key = `recordings/uploads/${new Date().toISOString().slice(0, 10)}/${uploadId}-${safeFileName(input.fileName)}`;
-  const url = `https://${config.accountId}.r2.cloudflarestorage.com/${config.bucketName}/${key}`;
-  const signer = new AwsClient({
-    accessKeyId: config.accessKeyId,
-    secretAccessKey: config.secretAccessKey,
-    service: "s3",
-    region: "auto",
-    retries: 0
-  });
-  const signed = await signer.sign(url, {
-    method: "PUT",
-    headers: {
-      "content-type": contentType
-    },
-    aws: {
-      signQuery: true,
-      allHeaders: true
-    }
-  });
-
-  return {
-    uploadId,
-    key,
-    uploadUrl: signed.url,
-    method: "PUT",
-    expiresIn: 900,
-    expiresAt: new Date(Date.now() + 900 * 1000).toISOString(),
-    headers: {
-      "content-type": contentType
-    }
-  };
-}
-
-async function completeDirectUpload(env: WorkerEnv, input: DirectUploadCompleteInput) {
-  if (!input.key.startsWith("recordings/uploads/") || !input.key.includes(input.uploadId)) {
-    throw new ApiError("invalid_upload_key", "Upload key does not match the upload session", 400);
-  }
-
-  const object = await env.CLIP_PARTNER_BUCKET.head(input.key);
-  if (!object) {
-    throw new ApiError("upload_not_found", "Uploaded object was not found in R2", 404);
-  }
-
-  return createRecordingAsset(
-    env,
-    {
-      title: input.title,
-      ipName: input.ipName,
-      sourcePlatform: input.sourcePlatform
-    },
-    input.key
-  );
-}
-
-async function createClipTask(env: WorkerEnv, upload: RecordingUploadResult) {
-  const dedupeKey = `clip.create:${upload.clipAssetId}`;
-  try {
-    const existing = await selectRows<{ id: string }>(env, "clip_tasks", `select=id&${eq("dedupe_key", dedupeKey)}&limit=1`);
-    if (first(existing)) {
-      return first(existing).id;
-    }
-
-    const task = await insertRow<{ id: string }>(env, "clip_tasks", {
-      type: "clip.create",
-      dedupe_key: dedupeKey,
-      recording_id: upload.recordingId,
-      clip_asset_id: upload.clipAssetId,
-      r2_key: upload.r2Key,
-      status: "queued",
-      payload: upload
-    });
-    return task.id;
-  } catch (error) {
-    console.warn(
-      JSON.stringify({
-        level: "warn",
-        message: "clip_tasks table unavailable; queueing without persistent task record",
-        detail: error instanceof Error ? error.message : "Unknown error"
-      })
-    );
-    return dedupeKey;
-  }
-}
-
-async function queueClipTask(env: WorkerEnv, upload: RecordingUploadResult) {
-  const taskId = await createClipTask(env, upload);
-  const payload: ClipTaskPayload = {
-    type: "clip.create",
-    taskId,
-    recordingId: upload.recordingId,
-    clipAssetId: upload.clipAssetId,
-    r2Key: upload.r2Key,
-    meta: upload.meta,
-    createdAt: new Date().toISOString()
-  };
-
-  return env.CLIP_TASK_QUEUE.send(payload);
 }
 
 async function bindProductToMaterial(env: WorkerEnv, clipAssetId: string, productId: string) {
@@ -3590,147 +3038,6 @@ async function createPerformanceImport(env: WorkerEnv, input: z.infer<typeof per
   return batch.id;
 }
 
-async function listFfmpegJobs(env: WorkerEnv, options = listOptions(new URLSearchParams())) {
-  const rows = await safeRows(() =>
-    selectRows<{
-      id: string;
-      status: string;
-      payload: Record<string, unknown> | null;
-      last_error: string | null;
-      queued_at: string | null;
-      updated_at: string | null;
-    }>(
-      env,
-      "clip_tasks",
-      buildListQuery("select=id,status,payload,last_error,queued_at,updated_at", "order=queued_at.desc", options, [])
-    )
-  );
-  const ffmpegJobs = rows.map((row) => ({
-    id: row.id,
-    status: publicFfmpegStatus(row.status, row.payload),
-    payload: row.payload ?? {},
-    message: row.last_error ?? "",
-    queuedAt: formatDateTime(row.queued_at),
-    updatedAt: formatDateTime(row.updated_at)
-  }));
-  return { items: ffmpegJobs, meta: listMeta(ffmpegJobs, options) };
-}
-
-function publicFfmpegStatus(dbStatus: string, payload: Record<string, unknown> | null) {
-  if (payload?.externalConfigured === false && dbStatus === "queued") return "pending_external_config";
-  if (dbStatus === "running") return "processing";
-  if (dbStatus === "succeeded") return "completed";
-  return dbStatus;
-}
-
-function ffmpegTaskStatus(status: z.infer<typeof ffmpegJobPatchSchema>["status"] | "queued") {
-  if (status === "processing") return "running";
-  if (status === "completed") return "succeeded";
-  if (status === "pending_external_config") return "queued";
-  return status;
-}
-
-async function createFfmpegJob(env: WorkerEnv, input: z.infer<typeof ffmpegJobSchema>) {
-  const config = await loadIntegrationRuntimeConfig(env, "ffmpeg");
-  const isConfigured = Boolean(
-    config.enabled &&
-      config.validation.status === "configured" &&
-      config.publicConfig.endpoint &&
-      config.secrets.token
-  );
-  const status = isConfigured ? "queued" : "pending_external_config";
-  const payload = {
-    type: "ffmpeg.job",
-    sourceClipTaskId: input.clipTaskId,
-    r2Key: input.r2Key,
-    outputPrefix: input.outputPrefix ?? "",
-    externalConfigured: isConfigured
-  };
-  const updated = isUuid(input.clipTaskId)
-    ? await patchRows<{ id: string }>(env, "clip_tasks", `id=eq.${input.clipTaskId}`, {
-        status: ffmpegTaskStatus(status),
-        payload: {
-          ...payload
-        },
-        last_error: isConfigured ? null : "FFmpeg worker endpoint is not configured",
-        updated_at: new Date().toISOString()
-      })
-    : [];
-  const existing = first(updated);
-  const job =
-    existing ??
-    (await insertRow<{ id: string }>(env, "clip_tasks", {
-      id: isUuid(input.clipTaskId) ? input.clipTaskId : undefined,
-      type: "ffmpeg.job",
-      dedupe_key: `ffmpeg:${input.clipTaskId}:${input.r2Key}`,
-      r2_key: input.r2Key,
-      status: ffmpegTaskStatus(status),
-      payload: {
-        ...payload
-      },
-      last_error: isConfigured ? null : "FFmpeg worker endpoint is not configured"
-    }));
-  return {
-    id: job.id,
-    status,
-    externalConfigured: isConfigured,
-    message: isConfigured ? "Queued for FFmpeg worker" : "FFmpeg worker endpoint is not configured"
-  };
-}
-
-async function getFfmpegJob(env: WorkerEnv, id: string) {
-  const row = first(
-    await safeRows(() =>
-      selectRows<{
-        id: string;
-        status: string;
-        payload: Record<string, unknown> | null;
-        last_error: string | null;
-        queued_at: string | null;
-        updated_at: string | null;
-      }>(env, "clip_tasks", `select=id,status,payload,last_error,queued_at,updated_at&id=eq.${id}&limit=1`)
-    )
-  );
-  if (!row) throw new ApiError("not_found", "FFmpeg job not found", 404);
-  return {
-    id: row.id,
-    status: publicFfmpegStatus(row.status, row.payload),
-    payload: row.payload ?? {},
-    message: row.last_error ?? "",
-    queuedAt: formatDateTime(row.queued_at),
-    updatedAt: formatDateTime(row.updated_at)
-  };
-}
-
-async function updateFfmpegJob(env: WorkerEnv, id: string, input: z.infer<typeof ffmpegJobPatchSchema>) {
-  await patchRows(env, "clip_tasks", `id=eq.${id}`, {
-    status: ffmpegTaskStatus(input.status),
-    last_error: input.status === "failed" ? input.message ?? "FFmpeg job failed" : null,
-    updated_at: new Date().toISOString()
-  });
-  await insertRow(env, "clip_task_logs", {
-    clip_task_id: id,
-    level: input.status === "failed" ? "error" : "info",
-    message: input.message ?? `FFmpeg job ${input.status}`
-  }).catch(() => undefined);
-}
-
-async function handleFfmpegWebhook(env: WorkerEnv, request: Request) {
-  const config = await loadIntegrationRuntimeConfig(env, "ffmpeg");
-  const configuredToken = config.enabled ? config.secrets.token : "";
-  if (configuredToken) {
-    const token = bearerToken(request);
-    if (token !== configuredToken) {
-      throw new ApiError("forbidden", "Invalid FFmpeg webhook token", 403);
-    }
-  } else if (!isMockAuthAllowed(env)) {
-    throw new ApiError("integration_not_configured", "FFmpeg webhook token is not configured", 503);
-  }
-  const input = await readJson(request, ffmpegWebhookSchema);
-  await updateFfmpegJob(env, input.jobId, { status: input.status, message: input.message });
-  return input.jobId;
-}
-
 async function markNotificationRead(env: WorkerEnv, notificationId: string, session?: RequestSession | null) {
   await insertRow(env, "notification_reads", {
     notification_id: notificationId,
@@ -4195,7 +3502,7 @@ export async function handleApiRequest(request: Request, env: WorkerEnv, ctx: Ex
       }
 
       if (url.pathname === "/ffmpeg/webhook" && request.method === "POST") {
-        const jobId = await handleFfmpegWebhook(env, request);
+        const jobId = await handleFfmpegWebhook(env, bearerToken(request), await readJson(request, ffmpegWebhookSchema));
         return json({ accepted: true, jobId }, env, { status: 202 });
       }
 
@@ -4269,13 +3576,19 @@ export async function handleApiRequest(request: Request, env: WorkerEnv, ctx: Ex
       }
 
       if (url.pathname === "/recordings/direct-upload/complete" && request.method === "POST") {
-        const upload = await completeDirectUpload(env, await readJson(request, directUploadCompleteSchema));
+        const upload = await completeDirectUpload(env, await readJson(request, directUploadCompleteSchema), {
+          findOrCreateIp,
+          toPlatformValue
+        });
         ctx.waitUntil(queueClipTask(env, upload));
         return json(await listState(env), env, { status: 201 });
       }
 
       if (url.pathname === "/recordings/upload" && request.method === "POST") {
-        const upload = await uploadRecording(env, request);
+        const upload = await uploadRecording(env, request, {
+          findOrCreateIp,
+          toPlatformValue
+        });
         ctx.waitUntil(queueClipTask(env, upload));
         return json(await listState(env), env, { status: 201 });
       }
@@ -4351,27 +3664,67 @@ export async function handleApiRequest(request: Request, env: WorkerEnv, ctx: Ex
             )
           );
           const nextCredit = Math.max(0, Number(profile?.credit_score ?? 100) - 30);
-          await insertRow(env, "credit_score_events", {
-            distributor_id: distributor.id,
-            delta: -30,
-            reason: risk.handling_note ?? "Risk record blocked"
-          }).catch(() => undefined);
-          await patchRows(env, "distributor_profiles", `id=eq.${distributor.id}`, {
-            credit_score: nextCredit,
-            onboarding_status: nextCredit < 60 ? "suspended" : undefined,
-            updated_at: new Date().toISOString()
-          }).catch(() => undefined);
-          await insertRow(env, "wallet_transactions", {
-            distributor_id: distributor.id,
-            type: "freeze",
-            amount: 0,
-            status: "frozen",
-            source: risk.work_url,
-            note: risk.handling_note ?? "Risk freeze"
-          }).catch(() => undefined);
-          await patchRows(env, "settlement_orders", `distributor_id=eq.${distributor.id}&status=neq.paid`, {
-            status: "blocked"
-          }).catch(() => undefined);
+          await runAuditedSideEffect(
+            env,
+            {
+              type: "credit_adjust",
+              targetId: distributor.id,
+              detail: {
+                riskRecordId: riskMatch[1],
+                delta: -30,
+                nextCredit,
+                reason: risk.handling_note ?? "Risk record blocked"
+              }
+            },
+            async () => {
+              await insertRow(env, "credit_score_events", {
+                distributor_id: distributor.id,
+                delta: -30,
+                reason: risk.handling_note ?? "Risk record blocked"
+              });
+              await patchRows(env, "distributor_profiles", `id=eq.${distributor.id}`, {
+                credit_score: nextCredit,
+                onboarding_status: nextCredit < 60 ? "suspended" : undefined,
+                updated_at: new Date().toISOString()
+              });
+            }
+          );
+          await runAuditedSideEffect(
+            env,
+            {
+              type: "wallet_freeze",
+              targetId: distributor.id,
+              detail: {
+                riskRecordId: riskMatch[1],
+                source: risk.work_url,
+                note: risk.handling_note ?? "Risk freeze"
+              }
+            },
+            () =>
+              insertRow(env, "wallet_transactions", {
+                distributor_id: distributor.id,
+                type: "freeze",
+                amount: 0,
+                status: "frozen",
+                source: risk.work_url,
+                note: risk.handling_note ?? "Risk freeze"
+              })
+          );
+          await runAuditedSideEffect(
+            env,
+            {
+              type: "settlement_block",
+              targetId: distributor.id,
+              detail: {
+                riskRecordId: riskMatch[1],
+                status: "blocked"
+              }
+            },
+            () =>
+              patchRows(env, "settlement_orders", `distributor_id=eq.${distributor.id}&status=neq.paid`, {
+                status: "blocked"
+              })
+          );
         }
         return json(await listState(env), env);
       }

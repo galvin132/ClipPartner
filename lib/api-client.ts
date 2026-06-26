@@ -45,7 +45,13 @@ export function sessionHeaders() {
 export async function apiJson<T>(path: string, init: RequestInit = {}) {
   const base = apiBase();
   if (!base) {
-    return null;
+    const error = new Error("NEXT_PUBLIC_API_BASE_URL is not configured");
+    void reportClientIssue("api_error", error.message, {
+      severity: "error",
+      feature: "remote_api",
+      details: { path, method: init.method ?? "GET" }
+    });
+    throw error;
   }
 
   const method = init.method ?? "GET";

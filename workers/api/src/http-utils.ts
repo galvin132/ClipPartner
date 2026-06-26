@@ -7,11 +7,18 @@ const jsonHeaders = {
   "content-type": "application/json; charset=utf-8"
 };
 
+const mockAuthHeaders = ["x-clip-role", "x-clip-user-id", "x-clip-display-name", "x-clip-auth-provider"];
+
 export function corsHeaders(env: WorkerEnv) {
+  const allowHeaders = ["content-type", "authorization"];
+  if (env.APP_ENV !== "production") {
+    allowHeaders.push(...mockAuthHeaders);
+  }
+
   return {
     "access-control-allow-origin": env.FRONTEND_ORIGIN || "*",
     "access-control-allow-methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
-    "access-control-allow-headers": "content-type,authorization,x-clip-role,x-clip-user-id,x-clip-display-name,x-clip-auth-provider"
+    "access-control-allow-headers": allowHeaders.join(",")
   };
 }
 

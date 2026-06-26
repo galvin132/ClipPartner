@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useState, useEffect } from "react";
 import {
   ArrowRight,
   BadgeDollarSign,
@@ -11,10 +12,13 @@ import {
   LogOut,
   ShieldCheck,
   Trophy,
-  WalletCards
+  WalletCards,
+  TrendingUp,
+  Briefcase,
+  Video,
+  ChevronRight
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useEffect } from "react";
 import { AuthGate } from "@/components/AuthGate";
 import { useAuth } from "@/components/AuthProvider";
 import { StatusBadge } from "@/components/Badge";
@@ -34,6 +38,7 @@ function PartnerDashboard() {
   const router = useRouter();
   const { session, logout } = useAuth();
   const { state, markNotificationRead, syncStatus, refreshRemoteList } = useClipPartnerStore();
+  const [activeTab, setActiveTab] = useState<"overview" | "tasks" | "works" | "alerts">("overview");
   const distributorName = session?.displayName ?? "";
 
   useEffect(() => {
@@ -48,11 +53,11 @@ function PartnerDashboard() {
 
   const profile = state.distributorProfiles.find((item) => displayDistributorName(item.displayName) === distributorName);
   const claims = state.taskClaims.filter((item) => displayDistributorName(item.distributorName) === distributorName);
-  const notices = state.notifications.filter((item) => item.audience === "all" || item.audience === "partner").slice(0, 3);
+  const notices = state.notifications.filter((item) => item.audience === "all" || item.audience === "partner").slice(0, 5);
   const stats = buildPartnerPersonalStats(state, distributorName);
   const recentRecords = state.publishRecords
     .filter((item) => displayDistributorName(item.distributorName) === distributorName)
-    .slice(0, 4);
+    .slice(0, 6);
 
   function handleLogout() {
     logout();
@@ -61,217 +66,322 @@ function PartnerDashboard() {
 
   return (
     <div className="partner-shell">
-      <header className="partner-header">
-        <div className="partner-header-inner">
-          <div>
-            <div className="brand-title">切片合伙人赚钱中心</div>
-            <div className="brand-subtitle">
-              {distributorName} · 信用分 {stats.creditScore} · {syncStatus === "remote" ? "线上数据" : "演示数据"}
+      <header className="partner-header-modern">
+        <div className="partner-header-inner-modern">
+          <div className="partner-header-brand">
+            <div className="partner-brand-logo" />
+            <div>
+              <div className="partner-brand-title">切片合伙人工作台</div>
+              <div className="partner-brand-subtitle">
+                <span className="user-tag">{distributorName}</span>
+                <span className="dot-divider">·</span>
+                <span className="score-tag">信用分 <strong>{stats.creditScore}</strong></span>
+                <span className="dot-divider">·</span>
+                <span className="data-source-tag">{syncStatus === "remote" ? "线上实时" : "本地演示"}</span>
+              </div>
             </div>
           </div>
-          <div className="toolbar">
-            <Link className="button" href="/partner/tasks">
-              领任务
+          <div className="partner-header-actions">
+            <Link className="button partner-action-btn" href="/partner/tasks">
+              领取任务
             </Link>
-            <Link className="button" href="/partner/wallet">
-              看钱包
+            <Link className="button partner-action-btn" href="/partner/wallet">
+              我的钱包
             </Link>
-            <button className="button" aria-label="退出" onClick={handleLogout}>
-              <LogOut size={16} aria-hidden />
+            <button className="button partner-logout-btn" aria-label="退出" onClick={handleLogout}>
+              <LogOut size={15} />
+              <span>安全退出</span>
             </button>
           </div>
         </div>
       </header>
 
-      <main className="partner-main">
-        <section className="partner-earnings-hero">
-          <div>
-            <span className="badge success">我的收益战报</span>
-            <h1>把任务发出去，把通过核验的作品变成佣金。</h1>
+      <main className="partner-main-modern">
+        {/* 顶部战报看板：作为主视觉背景 */}
+        <section className="partner-earnings-hero-modern">
+          <div className="hero-welcome-area">
+            <span className="badge success-badge-filled">收益业绩战报</span>
+            <h1>领取爆款授权素材，发布作品自动躺赚佣金。</h1>
             <p>
-              优先领取有授权、有商品、有爆款素材的任务；发布后及时回填链接，越快通过核验，越快进入结算。
+              挑选带货力超强的 IP 达人片段，挂载专属商品链接发布。越快提交作品核验，佣金结算打款越迅速。
             </p>
-            <div className="toolbar">
-              <Link className="button primary" href="/partner/tasks">
-                去领取可赚钱任务 <ArrowRight size={16} aria-hidden />
+            <div className="hero-action-row">
+              <Link className="button primary-gradient-btn" href="/partner/tasks">
+                去领取高佣任务 <ArrowRight size={15} />
               </Link>
-              <Link className="button" href="/partner/authorizations">
-                申请更多授权
+              <Link className="button outline-white-btn" href="/partner/authorizations">
+                申请达人独家授权
               </Link>
             </div>
           </div>
-          <div className="partner-earnings-panel">
-            <span>本月预估佣金</span>
-            <strong>{money(stats.estimatedIncome)}</strong>
-            <p>
-              GMV {money(stats.totalGmv)} · 排名第 {stats.rankByGmv} · {stats.effectivePosts} 条作品已通过
+          <div className="hero-earnings-panel">
+            <div className="panel-accent-glow" />
+            <span className="panel-label">本月预估分账佣金</span>
+            <strong className="panel-value">{money(stats.estimatedIncome)}</strong>
+            <p className="panel-meta">
+              本月 GMV {money(stats.totalGmv)} · 全站排名第 {stats.rankByGmv} 名 · {stats.effectivePosts} 条作品核验通过
             </p>
           </div>
         </section>
 
-        <section className="metrics-grid">
-          <article className="metric-card">
-            <div className="metric-label">
-              <BadgeDollarSign size={16} aria-hidden /> 可用收益
-            </div>
-            <div className="metric-value">{money(stats.availableIncome)}</div>
-            <div className="metric-note">已经进入钱包的可结算金额</div>
-          </article>
-          <article className="metric-card">
-            <div className="metric-label">
-              <ClipboardList size={16} aria-hidden /> 待回填
-            </div>
-            <div className="metric-value">{stats.pendingPublish}</div>
-            <div className="metric-note">已领取/下载，发布后要补作品链接</div>
-          </article>
-          <article className="metric-card">
-            <div className="metric-label">
-              <ShieldCheck size={16} aria-hidden /> 待核验
-            </div>
-            <div className="metric-value">{stats.pendingReview}</div>
-            <div className="metric-note">后台通过后才进入结算</div>
-          </article>
-          <article className="metric-card">
-            <div className="metric-label">
-              <WalletCards size={16} aria-hidden /> 冻结金额
-            </div>
-            <div className="metric-value">{money(stats.frozenIncome)}</div>
-            <div className="metric-note">{stats.invalidPosts} 条异常作品会影响收益</div>
-          </article>
-        </section>
+        {/* 合伙人专用高级 Tabs 导航条 */}
+        <div className="partner-tabs-nav">
+          <button
+            className={`partner-tab-btn ${activeTab === "overview" ? "active" : ""}`}
+            onClick={() => setActiveTab("overview")}
+          >
+            <TrendingUp size={15} />
+            <span>我的收益大盘</span>
+          </button>
+          <button
+            className={`partner-tab-btn ${activeTab === "tasks" ? "active" : ""}`}
+            onClick={() => setActiveTab("tasks")}
+          >
+            <Briefcase size={15} />
+            <span>任务与领取记录</span>
+            {stats.pendingPublish > 0 && (
+              <span className="tab-badge-count">{stats.pendingPublish}</span>
+            )}
+          </button>
+          <button
+            className={`partner-tab-btn ${activeTab === "works" ? "active" : ""}`}
+            onClick={() => setActiveTab("works")}
+          >
+            <Video size={15} />
+            <span>作品收益分账</span>
+          </button>
+          <button
+            className={`partner-tab-btn ${activeTab === "alerts" ? "active" : ""}`}
+            onClick={() => setActiveTab("alerts")}
+          >
+            <Bell size={15} />
+            <span>赚钱通知提醒</span>
+            {notices.some((n) => !n.isRead) && (
+              <span className="tab-badge-dot" />
+            )}
+          </button>
+        </div>
 
-        <section className="content-grid">
-          <div className="content-card">
-            <div className="section-heading-row">
-              <h2 className="section-title">我的赚钱动作</h2>
-              {profile ? <StatusBadge status={profile.onboardingStatus} /> : null}
-            </div>
-            <div className="workflow">
-              <Link className="workflow-row" href="/partner/onboarding">
-                <span className="step-index">1</span>
-                <div>
-                  <div className="step-title">保持准入状态</div>
-                  <div className="step-desc">资料、账号、考试、协议完整，才能持续拿授权。</div>
-                </div>
-                <span className="badge info">{stats.creditScore} 分</span>
-              </Link>
-              <Link className="workflow-row" href="/partner/authorizations">
-                <span className="step-index">2</span>
-                <div>
-                  <div className="step-title">扩大授权范围</div>
-                  <div className="step-desc">当前 {stats.activeAuthorizations} 个有效授权，授权越多，可领取任务越多。</div>
-                </div>
-                <span className="badge success">
-                  <Crown size={13} aria-hidden /> 授权
-                </span>
-              </Link>
-              <Link className="workflow-row" href="/partner/tasks">
-                <span className="step-index">3</span>
-                <div>
-                  <div className="step-title">优先领高转化任务</div>
-                  <div className="step-desc">当前有 {stats.availableTaskCount} 个可领取任务，先看商品和奖励规则。</div>
-                </div>
-                <span className="badge warning">
-                  <Flame size={13} aria-hidden /> 领任务
-                </span>
-              </Link>
-              <Link className="workflow-row" href="/partner/wallet">
-                <span className="step-index">4</span>
-                <div>
-                  <div className="step-title">看清每笔收益</div>
-                  <div className="step-desc">GMV、佣金、冻结、打款都能追到作品和任务。</div>
-                </div>
-                <span className="badge info">钱包</span>
-              </Link>
-            </div>
-          </div>
+        {/* TAB 1: 我的收益大盘 */}
+        <div className={`modern-tab-panel ${activeTab === "overview" ? "active" : ""}`}>
+          <section className="metrics-grid" style={{ marginBottom: 20 }}>
+            <article className="metric-card metric-emerald">
+              <div className="metric-label">
+                <BadgeDollarSign size={16} /> <span>可用账户余额</span>
+              </div>
+              <div className="metric-value">{money(stats.availableIncome)}</div>
+              <div className="metric-note">已核验通过并可直接发起提现结算的金额</div>
+            </article>
+            <article className="metric-card metric-amber">
+              <div className="metric-label">
+                <ClipboardList size={16} /> <span>已领待回填任务</span>
+              </div>
+              <div className="metric-value">{stats.pendingPublish}</div>
+              <div className="metric-note">已下载素材，发布作品后需尽快补齐链接</div>
+            </article>
+            <article className="metric-card metric-blue">
+              <div className="metric-label">
+                <ShieldCheck size={16} /> <span>已交待核验作品</span>
+              </div>
+              <div className="metric-value">{stats.pendingReview}</div>
+              <div className="metric-note">链接已提交，系统与人工核对后即刻结算</div>
+            </article>
+            <article className="metric-card metric-rose">
+              <div className="metric-label">
+                <WalletCards size={16} /> <span>违规冻结/风控</span>
+              </div>
+              <div className="metric-value">{money(stats.frozenIncome)}</div>
+              <div className="metric-note">{stats.invalidPosts} 条异常作品导致分账被延迟限制</div>
+            </article>
+          </section>
 
-          <div className="content-card">
-            <h2 className="section-title">
-              <Bell size={18} aria-hidden /> 赚钱提醒
-            </h2>
-            <div className="workflow">
-              {notices.map((notice) => (
-                <button className="workflow-row" key={notice.id} onClick={() => markNotificationRead(notice.id)}>
-                  <span className="step-index">{notice.isRead ? "已读" : "新"}</span>
-                  <div>
-                    <div className="step-title">{notice.title}</div>
-                    <div className="step-desc">{notice.content}</div>
+          <section className="content-grid">
+            <div className="content-card">
+              <div className="section-heading-row">
+                <h2 className="section-title">🚀 稳步赚钱核心步骤</h2>
+                {profile ? <StatusBadge status={profile.onboardingStatus} /> : null}
+              </div>
+              <div className="workflow-steps-modern">
+                <Link className="workflow-step-item" href="/partner/onboarding">
+                  <div className="step-num">1</div>
+                  <div className="step-body">
+                    <strong>新手起航与准入保持</strong>
+                    <p>提交账号资料、完成新手考试和协议签署，守住信用分，确保持续拿独家爆款授权。</p>
                   </div>
-                  <span className="badge warning">{notice.createdAt}</span>
-                </button>
-              ))}
+                  <span className="step-badge status-normal">{stats.creditScore} 信用分</span>
+                  <ChevronRight size={16} className="step-arrow" />
+                </Link>
+                <Link className="workflow-step-item" href="/partner/authorizations">
+                  <div className="step-num">2</div>
+                  <div className="step-body">
+                    <strong>申请扩大 IP 授权范围</strong>
+                    <p>目前拥有 {stats.activeAuthorizations} 个生效中授权。授权越多，可解锁的爆款高分成佣金任务越多。</p>
+                  </div>
+                  <span className="step-badge status-success">申请授权</span>
+                  <ChevronRight size={16} className="step-arrow" />
+                </Link>
+                <Link className="workflow-step-item" href="/partner/tasks">
+                  <div className="step-num">3</div>
+                  <div className="step-body">
+                    <strong>领取高曝光、高分成任务</strong>
+                    <p>当前共有 {stats.availableTaskCount} 个可领素材任务。建议优先选择带货转化极高的爆单商品。</p>
+                  </div>
+                  <span className="step-badge status-warning">去领任务</span>
+                  <ChevronRight size={16} className="step-arrow" />
+                </Link>
+                <Link className="workflow-step-item" href="/partner/wallet">
+                  <div className="step-num">4</div>
+                  <div className="step-body">
+                    <strong>查看账单明细与提现</strong>
+                    <p>每笔 GMV 抽成、预估算和冻结惩罚都可穿透追溯至对应的视频作品。公开透明，快速提现。</p>
+                  </div>
+                  <span className="step-badge status-info">我的钱包</span>
+                  <ChevronRight size={16} className="step-arrow" />
+                </Link>
+              </div>
             </div>
-          </div>
-        </section>
 
-        <section className="content-grid" style={{ marginTop: 18 }}>
-          <div className="table-card">
+            <div className="content-card promo-tips-card">
+              <h3>💡 合伙人赚钱黄金法则</h3>
+              <ul>
+                <li><strong>素材二创：</strong>尽量对下载的切片素材做混剪、添加转场或气泡，提高平台去重通过率，更容易爆播放。</li>
+                <li><strong>黄金回填：</strong>发布作品后 24 小时内一定要在此回填视频作品链接，越早回填越快锁定结算权重。</li>
+                <li><strong>信用保护：</strong>请不要挂羊头卖狗肉或引导不实宣传，否则风控拦截会直接冻结本月全部余额。</li>
+              </ul>
+            </div>
+          </section>
+        </div>
+
+        {/* TAB 2: 任务与领取记录 */}
+        <div className={`modern-tab-panel ${activeTab === "tasks" ? "active" : ""}`}>
+          <section className="table-card">
             <div className="table-header">
-              <h2 className="table-title">我的领取记录</h2>
-              <Link className="button" href="/partner/tasks">
-                继续领任务
+              <h2 className="table-title">📝 我的历史领取记录 (最近 10 条)</h2>
+              <Link className="button primary-btn-sm" href="/partner/tasks">
+                去领新任务
               </Link>
             </div>
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>素材</th>
-                  <th>账号</th>
-                  <th>凭证</th>
-                  <th>状态</th>
-                </tr>
-              </thead>
-              <tbody>
-                {claims.slice(0, 5).map((claim) => (
-                  <tr key={claim.id}>
-                    <td>
-                      <div className="item-title">{claim.materialTitle}</div>
-                      <div className="item-meta">{claim.productName}</div>
-                    </td>
-                    <td>{claim.socialAccount}</td>
-                    <td>{claim.claimToken}</td>
-                    <td>
-                      <StatusBadge status={claim.status} />
-                    </td>
+            <div className="data-table-wrapper">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>已领切片素材</th>
+                    <th>挂载商品</th>
+                    <th>分发账号</th>
+                    <th>防伪专属 Token</th>
+                    <th>当前核验状态</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {claims.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="text-center text-muted py-10">暂无任何素材领取记录，快去领取并下载你的第一个赚钱素材吧！</td>
+                    </tr>
+                  ) : (
+                    claims.map((claim) => (
+                      <tr key={claim.id}>
+                        <td>
+                          <div className="item-title">{claim.materialTitle}</div>
+                          <div className="item-meta">领用时间: {claim.id.startsWith("claim-") ? "刚刚" : "近期"}</div>
+                        </td>
+                        <td>{claim.productName}</td>
+                        <td>
+                          <span className="badge info-badge-soft">{claim.socialAccount}</span>
+                        </td>
+                        <td>
+                          <code className="token-code">{claim.claimToken}</code>
+                        </td>
+                        <td>
+                          <StatusBadge status={claim.status} />
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
 
-          <div className="table-card">
+        {/* TAB 3: 作品收益分账 */}
+        <div className={`modern-tab-panel ${activeTab === "works" ? "active" : ""}`}>
+          <section className="table-card">
             <div className="table-header">
-              <h2 className="table-title">我的作品收益</h2>
-              <span className="badge success">
-                <Trophy size={13} aria-hidden /> 排名第 {stats.rankByGmv}
+              <h2 className="table-title">🎥 我的分发作品收益账单</h2>
+              <span className="badge success-badge-soft">
+                <Trophy size={12} /> 我的全站带货排名：第 {stats.rankByGmv} 名
               </span>
             </div>
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>作品</th>
-                  <th>状态</th>
-                  <th>GMV</th>
-                </tr>
-              </thead>
-              <tbody>
-                {recentRecords.map((record) => (
-                  <tr key={record.id}>
-                    <td>
-                      <div className="item-title">{record.materialTitle}</div>
-                      <div className="item-meta">{record.productName}</div>
-                    </td>
-                    <td>
-                      <StatusBadge status={record.status} />
-                    </td>
-                    <td>{money(record.gmv)}</td>
+            <div className="data-table-wrapper">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>已发作品关联素材</th>
+                    <th>关联主推商品</th>
+                    <th>核验状态</th>
+                    <th>成交 GMV</th>
+                    <th>我的预估佣金</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
+                </thead>
+                <tbody>
+                  {recentRecords.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="text-center text-muted py-10">暂无任何作品收益记录，视频回填并产生出单后会在本表更新。</td>
+                    </tr>
+                  ) : (
+                    recentRecords.map((record) => (
+                      <tr key={record.id}>
+                        <td>
+                          <div className="item-title">{record.materialTitle}</div>
+                          <div className="item-meta">作品链接: <span className="text-truncate-link">{record.publishUrl}</span></div>
+                        </td>
+                        <td>{record.productName}</td>
+                        <td>
+                          <StatusBadge status={record.status} />
+                        </td>
+                    <td className="text-right text-bold text-emerald">{money(record.gmv)}</td>
+                    <td className="text-right text-bold text-amber">
+                      {(record.status === "verified" || record.status === "settled") ? money(record.gmv * 0.2) : money(0)}
+                    </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+
+        {/* TAB 4: 赚钱通知提醒 */}
+        <div className={`modern-tab-panel ${activeTab === "alerts" ? "active" : ""}`}>
+          <section className="content-card">
+            <h2 className="section-title">🔔 赚钱机会与系统重要提醒</h2>
+            <div className="partner-notifications-list">
+              {notices.length === 0 ? (
+                <div className="text-center text-muted py-8">暂无任何系统提醒</div>
+              ) : (
+                notices.map((notice) => (
+                  <button
+                    className={`partner-notice-row-modern ${notice.isRead ? "read" : "unread"}`}
+                    key={notice.id}
+                    onClick={() => markNotificationRead(notice.id)}
+                  >
+                    <div className="notice-badge">
+                      {notice.isRead ? <span className="dot-read" /> : <span className="dot-unread-glow" />}
+                    </div>
+                    <div className="notice-content-body">
+                      <div className="notice-title-row">
+                        <strong>{notice.title}</strong>
+                        <span className="notice-time">{notice.createdAt}</span>
+                      </div>
+                      <p className="notice-text">{notice.content}</p>
+                    </div>
+                  </button>
+                ))
+              )}
+            </div>
+          </section>
+        </div>
       </main>
     </div>
   );

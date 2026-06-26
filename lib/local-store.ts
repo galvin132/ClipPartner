@@ -1,28 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  accountBindings as seedAccountBindings,
-  agreementSignatures as seedAgreementSignatures,
-  authorizationPools as seedAuthorizationPools,
-  authorizationRequests as seedAuthorizationRequests,
-  clipTasks as seedClipTasks,
-  creditScoreEvents as seedCreditScoreEvents,
-  distributionTasks as seedDistributionTasks,
-  distributorProfiles as seedDistributorProfiles,
-  examAttempts as seedExamAttempts,
-  formalAuthorizations as seedFormalAuthorizations,
-  materials as seedMaterials,
-  notifications as seedNotifications,
-  products as seedProducts,
-  publishRecords as seedPublishRecords,
-  riskRecords as seedRiskRecords,
-  settlements as seedSettlements,
-  taskClaims as seedTaskClaims,
-  trainingCourses as seedTrainingCourses,
-  walletTransactions as seedWalletTransactions
-} from "./mock-data";
-import { apiBase, apiJson, optionalApiJson } from "./api-client";
+import { apiBase, apiJson } from "./api-client";
 import { readAppSettings } from "./app-settings";
 import { reportClientIssue } from "./client-observability";
 import {
@@ -37,25 +16,37 @@ import {
   canUseLocalMutationFallback,
   shouldLoadLocalStateBeforeRemoteSync
 } from "./sync-policy";
+import { apiRequest, loadRemoteState } from "./store/remote-sync";
+import {
+  clearLocalState,
+  initialState,
+  isSameLocalDay,
+  listEndpoints,
+  listQuery,
+  loadLocalState,
+  nextId,
+  nowText,
+  writeLocalState,
+  type ClipPartnerState,
+  type ListKind,
+  type ListMeta,
+  type ListParams
+} from "./store/state";
+export type { ClipPartnerState } from "./store/state";
 import type {
   AccountBinding,
   AccountBindingStatus,
-  AgreementSignature,
   AuthorizationPool,
   AuthorizationPoolStatus,
   AuthorizationRequest,
   ClipTask,
   ClipTaskStatus,
   AuthorizationStatus,
-  CreditScoreEvent,
   DistributorProfile,
   DistributionTask,
   DistributionTaskStatus,
-  ExamAttempt,
-  FormalAuthorization,
   Material,
   MaterialStatus,
-  Notification,
   Product,
   PublishRecord,
   PublishStatus,
@@ -64,144 +55,8 @@ import type {
   Settlement,
   TaskClaim,
   TaskClaimStatus,
-  TrainingCourse,
   WalletTransaction
 } from "./domain";
-
-const STORAGE_KEY = "clip-partner-mvp-state-v1";
-
-export type ClipPartnerState = {
-  accountBindings: AccountBinding[];
-  agreementSignatures: AgreementSignature[];
-  authorizationPools: AuthorizationPool[];
-  authorizationRequests: AuthorizationRequest[];
-  creditScoreEvents: CreditScoreEvent[];
-  clipTasks: ClipTask[];
-  distributionTasks: DistributionTask[];
-  distributorProfiles: DistributorProfile[];
-  examAttempts: ExamAttempt[];
-  formalAuthorizations: FormalAuthorization[];
-  materials: Material[];
-  notifications: Notification[];
-  products: Product[];
-  publishRecords: PublishRecord[];
-  settlements: Settlement[];
-  riskRecords: RiskRecord[];
-  taskClaims: TaskClaim[];
-  trainingCourses: TrainingCourse[];
-  walletTransactions: WalletTransaction[];
-};
-
-type ListMeta = {
-  limit: number;
-  offset: number;
-  count: number;
-  nextOffset: number | null;
-};
-
-type ListParams = {
-  q?: string;
-  status?: string;
-  platform?: string;
-  limit?: number;
-  offset?: number;
-};
-
-type ListKind =
-  | "accountBindings"
-  | "authorizationPools"
-  | "authorizationRequests"
-  | "clipTasks"
-  | "distributionTasks"
-  | "distributorProfiles"
-  | "examAttempts"
-  | "formalAuthorizations"
-  | "agreementSignatures"
-  | "creditScoreEvents"
-  | "materials"
-  | "notifications"
-  | "products"
-  | "publishRecords"
-  | "settlements"
-  | "riskRecords"
-  | "taskClaims"
-  | "trainingCourses"
-  | "walletTransactions";
-
-const listEndpoints: Record<ListKind, string> = {
-  accountBindings: "/account-bindings",
-  authorizationPools: "/admin/authorization-pools",
-  authorizationRequests: "/authorization-requests",
-  clipTasks: "/clip-tasks",
-  distributionTasks: "/admin/distribution-tasks",
-  distributorProfiles: "/admin/distributors",
-  examAttempts: "/admin/training",
-  formalAuthorizations: "/partner/authorizations",
-  agreementSignatures: "/admin/training",
-  creditScoreEvents: "/admin/training",
-  materials: "/materials",
-  notifications: "/notifications",
-  products: "/products",
-  publishRecords: "/publish-records",
-  settlements: "/settlements",
-  riskRecords: "/risk-records",
-  taskClaims: "/partner/tasks",
-  trainingCourses: "/admin/training",
-  walletTransactions: "/partner/wallet"
-};
-
-const initialState: ClipPartnerState = {
-  accountBindings: seedAccountBindings,
-  agreementSignatures: seedAgreementSignatures,
-  authorizationPools: seedAuthorizationPools,
-  authorizationRequests: seedAuthorizationRequests,
-  creditScoreEvents: seedCreditScoreEvents,
-  clipTasks: seedClipTasks,
-  distributionTasks: seedDistributionTasks,
-  distributorProfiles: seedDistributorProfiles,
-  examAttempts: seedExamAttempts,
-  formalAuthorizations: seedFormalAuthorizations,
-  materials: seedMaterials,
-  notifications: seedNotifications,
-  products: seedProducts,
-  publishRecords: seedPublishRecords,
-  settlements: seedSettlements,
-  riskRecords: seedRiskRecords,
-  taskClaims: seedTaskClaims,
-  trainingCourses: seedTrainingCourses,
-  walletTransactions: seedWalletTransactions
-};
-
-function loadLocalState(): ClipPartnerState {
-  if (typeof window === "undefined") {
-    return initialState;
-  }
-
-  const raw = window.localStorage.getItem(STORAGE_KEY);
-  if (!raw) {
-    return initialState;
-  }
-
-  try {
-    return { ...initialState, ...JSON.parse(raw) };
-  } catch {
-    return initialState;
-  }
-}
-
-function nextId(prefix: string) {
-  return `${prefix}-${new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14)}`;
-}
-
-function nowText() {
-  return new Date().toLocaleString("zh-CN", { hour12: false });
-}
-
-function isSameLocalDay(value: string) {
-  const todayIso = new Date().toISOString().slice(0, 10);
-  const todayLocal = new Date().toLocaleDateString("zh-CN");
-  return value.startsWith(todayIso) || value.startsWith(todayLocal);
-}
 
 function addLocalClipTaskState(
   current: ClipPartnerState,
@@ -269,124 +124,6 @@ function updateLocalPublishRecordStatus(record: PublishRecord, status: PublishSt
   };
 }
 
-function listQuery(params: ListParams = {}) {
-  const search = new URLSearchParams();
-  search.set("limit", String(params.limit ?? 50));
-  if (params.offset) search.set("offset", String(params.offset));
-  if (params.q?.trim()) search.set("q", params.q.trim());
-  if (params.status && params.status !== "all") search.set("status", params.status);
-  if (params.platform && params.platform !== "all") search.set("platform", params.platform);
-  return search.toString();
-}
-
-async function apiRequest(path: string, init: RequestInit = {}) {
-  return apiJson<ClipPartnerState>(path, init);
-}
-
-async function loadRemoteState() {
-  const listLimit = 50;
-
-  try {
-    const [
-      accountBindings,
-      authorizationRequests,
-      clipTasks,
-      materials,
-      products,
-      publishRecords,
-      settlements,
-      riskRecords,
-      distributorProfiles,
-      authorizationPools,
-      distributionTasks,
-      partnerTasks,
-      partnerWallet,
-      partnerAuthorizations,
-      trainingState,
-      notifications
-    ] = await Promise.all([
-      apiJson<{ accountBindings: AccountBinding[]; meta?: ListMeta }>(`/account-bindings?limit=${listLimit}`),
-      apiJson<{ authorizationRequests: AuthorizationRequest[]; meta?: ListMeta }>(
-        `/authorization-requests?limit=${listLimit}`
-      ),
-      apiJson<{ clipTasks: ClipTask[]; meta?: ListMeta }>(`/clip-tasks?limit=${listLimit}`),
-      apiJson<{ materials: Material[]; meta?: ListMeta }>(`/materials?limit=${listLimit}`),
-      apiJson<{ products: Product[]; meta?: ListMeta }>(`/products?limit=${listLimit}`),
-      apiJson<{ publishRecords: PublishRecord[]; meta?: ListMeta }>(`/publish-records?limit=${listLimit}`),
-      apiJson<{ settlements: Settlement[]; meta?: ListMeta }>(`/settlements?limit=${listLimit}`),
-      apiJson<{ riskRecords: RiskRecord[]; meta?: ListMeta }>(`/risk-records?limit=${listLimit}`),
-      optionalApiJson<{ distributorProfiles: DistributorProfile[]; meta?: ListMeta }>(
-        `/admin/distributors?limit=${listLimit}`
-      ),
-      optionalApiJson<{ authorizationPools: AuthorizationPool[]; meta?: ListMeta }>(
-        `/admin/authorization-pools?limit=${listLimit}`
-      ),
-      optionalApiJson<{ distributionTasks: DistributionTask[]; meta?: ListMeta }>(
-        `/admin/distribution-tasks?limit=${listLimit}`
-      ),
-      optionalApiJson<{ distributionTasks: DistributionTask[]; taskClaims: TaskClaim[]; meta?: ListMeta }>(
-        `/partner/tasks?limit=${listLimit}`
-      ),
-      optionalApiJson<{ walletTransactions: WalletTransaction[]; meta?: ListMeta }>(
-        `/partner/wallet?limit=${listLimit}`
-      ),
-      optionalApiJson<{ formalAuthorizations: FormalAuthorization[]; authorizationPools?: AuthorizationPool[]; meta?: ListMeta }>(
-        `/partner/authorizations?limit=${listLimit}`
-      ),
-      optionalApiJson<{
-        trainingCourses: TrainingCourse[];
-        examAttempts: ExamAttempt[];
-        agreementSignatures: AgreementSignature[];
-        creditScoreEvents: CreditScoreEvent[];
-      }>(`/admin/training?limit=${listLimit}`),
-      optionalApiJson<{ notifications: Notification[]; meta?: ListMeta }>(`/notifications?limit=${listLimit}`)
-    ]);
-
-    if (
-      accountBindings &&
-      authorizationRequests &&
-      clipTasks &&
-      materials &&
-      products &&
-      publishRecords &&
-      settlements &&
-      riskRecords
-    ) {
-      return {
-        accountBindings: accountBindings.accountBindings,
-        ...(trainingState?.agreementSignatures ? { agreementSignatures: trainingState.agreementSignatures } : {}),
-        ...(authorizationPools?.authorizationPools ? { authorizationPools: authorizationPools.authorizationPools } : {}),
-        authorizationRequests: authorizationRequests.authorizationRequests,
-        ...(trainingState?.creditScoreEvents ? { creditScoreEvents: trainingState.creditScoreEvents } : {}),
-        clipTasks: clipTasks.clipTasks,
-        ...(distributionTasks?.distributionTasks || partnerTasks?.distributionTasks
-          ? { distributionTasks: distributionTasks?.distributionTasks ?? partnerTasks?.distributionTasks ?? [] }
-          : {}),
-        ...(distributorProfiles?.distributorProfiles ? { distributorProfiles: distributorProfiles.distributorProfiles } : {}),
-        ...(trainingState?.examAttempts ? { examAttempts: trainingState.examAttempts } : {}),
-        ...(partnerAuthorizations?.formalAuthorizations ? { formalAuthorizations: partnerAuthorizations.formalAuthorizations } : {}),
-        materials: materials.materials,
-        ...(notifications?.notifications ? { notifications: notifications.notifications } : {}),
-        products: products.products,
-        publishRecords: publishRecords.publishRecords,
-        settlements: settlements.settlements,
-        riskRecords: riskRecords.riskRecords,
-        ...(partnerTasks?.taskClaims ? { taskClaims: partnerTasks.taskClaims } : {}),
-        ...(trainingState?.trainingCourses ? { trainingCourses: trainingState.trainingCourses } : {}),
-        ...(partnerWallet?.walletTransactions ? { walletTransactions: partnerWallet.walletTransactions } : {})
-      };
-    }
-  } catch {
-    void reportClientIssue("api_fallback", "Remote list endpoint failed; falling back to aggregate state", {
-      severity: "warn",
-      feature: "initial_remote_load"
-    });
-    // Fall back to the legacy aggregate endpoint while older Workers are still deployed.
-  }
-
-  return apiRequest("/state");
-}
-
 export function useClipPartnerStore() {
   const [state, setState] = useState<ClipPartnerState>(initialState);
   const [isHydrated, setIsHydrated] = useState(false);
@@ -431,9 +168,9 @@ export function useClipPartnerStore() {
 
   useEffect(() => {
     if (isHydrated && canPersistLocalState()) {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      writeLocalState(state);
     } else if (isHydrated) {
-      window.localStorage.removeItem(STORAGE_KEY);
+      clearLocalState();
     }
   }, [isHydrated, state]);
 
@@ -1545,7 +1282,7 @@ export function useClipPartnerStore() {
   function resetDemoData() {
     void syncMutation("/state/reset", { method: "POST" }, () => initialState);
     if (typeof window !== "undefined") {
-      window.localStorage.removeItem(STORAGE_KEY);
+      clearLocalState();
     }
   }
 
