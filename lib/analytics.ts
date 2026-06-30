@@ -3,14 +3,9 @@ import type { ClipPartnerState } from "./local-store";
 type PublishRecord = ClipPartnerState["publishRecords"][number];
 
 const effectiveStatuses = new Set(["verified", "settled"]);
-const distributorNameAliases: Record<string, string> = {
-  "鍛ㄥ┃": "周婧",
-  "鏉庢櫒": "李晨",
-  "闄堝嚡": "陈凯"
-};
 
 export function displayDistributorName(name: string) {
-  return distributorNameAliases[name] ?? name;
+  return name;
 }
 
 function sum(values: number[]) {

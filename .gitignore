@@ -26,6 +26,9 @@ ClipPartner项目实施方案.md
 docs/*roadmap*.md
 docs/*research*.md
 
+# WorkBuddy agent workspace data (not source code)
+.workbuddy/
+
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
