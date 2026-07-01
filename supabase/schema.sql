@@ -1230,6 +1230,17 @@ group by dp.id, dp.display_name;
 grant usage on schema public to service_role;
 grant select, insert, update, delete on all tables in schema public to service_role;
 grant select on material_summaries, product_summaries, publish_record_summaries, settlement_summaries, distributor_summaries, authorization_pool_summaries, distribution_task_summaries, partner_wallet_summaries to service_role;
-grant usage on schema public to authenticated;
-grant select, insert, update, delete on all tables in schema public to authenticated;
-grant select on material_summaries, product_summaries, publish_record_summaries, settlement_summaries, distributor_summaries, authorization_pool_summaries, distribution_task_summaries, partner_wallet_summaries to authenticated;
+grant usage, select on all sequences in schema public to service_role;
+grant execute on all routines in schema public to service_role;
+
+-- Least privilege (Supabase Data API standard): the app reaches Postgres only
+-- through the Worker using the service_role key (see workers/api/src/supabase-rest.ts).
+-- No client-side supabase-js / PostgREST access runs as anon or authenticated,
+-- so deny them table access instead of granting broad CRUD. Mirrors the lockdown
+-- in migration 20260623202057_better_auth_gateway_foundation.sql.
+revoke all on all tables in schema public from anon;
+revoke all on all tables in schema public from authenticated;
+revoke all on all sequences in schema public from anon;
+revoke all on all sequences in schema public from authenticated;
+revoke all on all routines in schema public from anon;
+revoke all on all routines in schema public from authenticated;

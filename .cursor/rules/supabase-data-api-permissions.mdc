@@ -1,0 +1,38 @@
+---
+description: Supabase Data API 表级授权标准（新建 public 表必须显式写 GRANT，最小权限）
+globs: supabase/**/*.sql
+alwaysApply: false
+---
+
+# Supabase Data API 权限标准
+
+项目通过 Supabase Data API（`supabase-js` / `@supabase/ssr` / PostgREST `/rest/v1/` / GraphQL `/graphql/v1/`）访问数据时，凡在迁移或初始化脚本中新建 `public` schema 表，必须在**同一个建表流程**里显式写表级 `GRANT`。RLS/policy 只做行级控制，不能替代表级授权。
+
+本项目现状：应用只经 Worker 用 `service_role`（见 `workers/api/src/supabase-rest.ts`）访问 DB，前端不直连 Supabase。因此业务表默认**只授 `service_role`**，`anon`/`authenticated` 已被迁移 `revoke`。
+
+## 执行规则
+
+- 新增 `create table [if not exists] public.*` 时，必须同批显式补齐 `anon` / `authenticated` / `service_role` 三个角色的授权决策，不要依赖 schema 级隐式继承。
+- 最小权限：不要图省事给 `anon` 全量权限；只有真正公开读取的数据才 `grant select ... to anon`。
+- 服务端专用 / 安全敏感 / 审计类表（token、secret、proxy session、access events 等）默认只给 `service_role`。
+- 用户侧需经 Supabase client 直接访问的表，才给 `authenticated` 必要 CRUD，并配 `auth.uid()` RLS policy。
+- 函数/RPC 按需 `grant execute on function ...`，并确认函数内部访问的表具备对应角色权限。
+- 旧项目既有权限默认不主动重写；除非用户明确要求、Security Advisor 报警、或确认 2026-10-30 后影响使用。
+
+## 模板
+
+```sql
+create table if not exists public.your_table (
+  id uuid primary key default gen_random_uuid(),
+  created_at timestamptz not null default now()
+);
+
+alter table public.your_table enable row level security;
+
+drop policy if exists your_table_service_role_all on public.your_table;
+create policy your_table_service_role_all on public.your_table
+  for all to service_role using (true) with check (true);
+
+-- 服务端专用表：只给 service_role（anon/authenticated 有意不授权）
+grant select, insert, update, delete on public.your_table to service_role;
+```
